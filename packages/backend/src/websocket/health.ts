@@ -59,6 +59,9 @@ async function publishHealthStatus(): Promise<void> {
 
 let intervalId: NodeJS.Timeout | null = null;
 
+/** Exposed for testing — trigger a single health publish immediately. */
+export { publishHealthStatus };
+
 export function startHealthEmitter(): void {
   if (intervalId !== null) return;
   intervalId = setInterval(() => {

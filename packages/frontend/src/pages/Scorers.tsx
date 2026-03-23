@@ -38,7 +38,7 @@ function ScorerCard({ config }: { config: ScorerConfig }) {
     })
   }
 
-  const paramEntries = Object.entries(config.parameters)
+  const paramEntries = Object.entries(config.parameters ?? {})
   // Fake dimension scores for display — real data would come from useContextScores
   const hasDimensions = false
 

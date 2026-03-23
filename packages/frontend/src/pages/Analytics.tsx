@@ -163,7 +163,7 @@ function CategoryPieChart() {
   const { data: summary, isLoading } = useAnalyticsSummary()
 
   if (isLoading) return <LoadingPage />
-  if (!summary || Object.keys(summary.by_category).length === 0) {
+  if (!summary || !summary.by_category || Object.keys(summary.by_category).length === 0) {
     return <EmptyState title="No category data" message="Category breakdown appears once trades execute." />
   }
 

@@ -99,11 +99,11 @@ describe('GET /api/system-config/:key', () => {
     expect(res.body.data.key).toBe(TEST_CONFIG_KEY);
   });
 
-  it('returns null data for unknown key', async () => {
+  it('returns 404 for unknown key', async () => {
     const res = await request(app).get('/api/system-config/no_such_key_xyz');
 
-    expect(res.status).toBe(200);
-    expect(res.body.data).toBeNull();
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe('NOT_FOUND');
   });
 });
 
@@ -118,9 +118,9 @@ describe('DELETE /api/system-config/:key', () => {
 
     expect(res.status).toBe(204);
 
-    // Verify it's gone
+    // Verify it's gone — now returns 404
     const check = await request(app).get(`/api/system-config/${key}`);
-    expect(check.body.data).toBeNull();
+    expect(check.status).toBe(404);
   });
 });
 

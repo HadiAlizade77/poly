@@ -63,7 +63,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
           <div className="flex items-center gap-2 flex-wrap">
             <OrderStatusBadge status={order.status} />
             <SideBadge side={order.side} />
-            <Badge variant="outline">{order.order_type.toUpperCase()}</Badge>
+            {order.order_type && <Badge variant="outline">{order.order_type.toUpperCase()}</Badge>}
             {order.maker_or_taker && <Badge variant="outline">{order.maker_or_taker}</Badge>}
           </div>
 
@@ -151,7 +151,7 @@ const columns: ColumnDef<Order, unknown>[] = [
   },
   {
     id: 'order_type', accessorKey: 'order_type', header: 'Type', size: 65,
-    cell: ({ getValue }) => <Badge variant="outline">{(getValue() as string).toUpperCase()}</Badge>,
+    cell: ({ getValue }) => { const v = getValue() as string | undefined; return v ? <Badge variant="outline">{v.toUpperCase()}</Badge> : null },
   },
   {
     id: 'price', accessorKey: 'price', header: 'Price', size: 75,

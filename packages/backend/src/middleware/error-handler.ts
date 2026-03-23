@@ -21,6 +21,15 @@ export const errorHandler: ErrorRequestHandler = (
   res: Response,
   _next: NextFunction,
 ): void => {
+  // JSON body parse errors from Express
+  if (err instanceof SyntaxError && 'body' in err) {
+    res.status(400).json({
+      success: false,
+      error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' },
+    });
+    return;
+  }
+
   if (err instanceof NotFoundError) {
     res.status(404).json({
       success: false,

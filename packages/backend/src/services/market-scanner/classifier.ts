@@ -77,6 +77,15 @@ function normalise(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9 ]/g, ' ');
 }
 
+/** Test whether a keyword appears at a word boundary in the haystack. */
+function matchesKeyword(haystack: string, kw: string): boolean {
+  // Require a leading word boundary so short tickers like 'sol', 'eth' don't
+  // false-match inside words like 'resolves' or 'whether'.
+  // No trailing boundary is required so 'oscar' still matches 'oscars',
+  // 'eth' still matches 'ethereum', 'sol' still matches 'solana', etc.
+  return new RegExp(`\\b${kw.replace(/\s+/g, '\\s+')}`).test(haystack);
+}
+
 /**
  * Classify a market into a MarketCategory.
  *
@@ -96,7 +105,7 @@ export function classifyMarket(
   const haystack = normalise(`${title} ${description ?? ''} ${tagText}`);
 
   for (const rule of RULES) {
-    if (rule.keywords.some((kw) => haystack.includes(kw))) {
+    if (rule.keywords.some((kw) => matchesKeyword(haystack, kw))) {
       return rule.category;
     }
   }

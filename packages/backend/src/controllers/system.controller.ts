@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import * as systemConfigService from '../services/system-config.service.js';
 import { sendItem } from '../utils/response.js';
 import { config } from '../config/env.js';
+import { NotFoundError } from '../services/errors.js';
 
 export function getHealth(_req: Request, res: Response): void {
   res.json({
@@ -34,6 +35,7 @@ export async function getSystemConfigs(
   try {
     if (req.params.key) {
       const record = await systemConfigService.get(req.params.key);
+      if (!record) throw new NotFoundError('SystemConfig', req.params.key);
       sendItem(res, record);
       return;
     }

@@ -8,7 +8,7 @@ import {
   type PaginationParams,
 } from './utils/pagination.js';
 
-const SINGLETON_ID = 'singleton';
+const SINGLETON_ID = '00000000-0000-0000-0000-000000000001';
 
 /** Return the single bankroll record, or null if not yet seeded. */
 export async function get(): Promise<Bankroll | null> {

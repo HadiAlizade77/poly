@@ -10,7 +10,7 @@ interface SystemConfig {
 interface HealthStatus {
   status: 'ok' | 'degraded' | 'down'
   uptime: number
-  services: Record<string, 'ok' | 'degraded' | 'down'>
+  services?: Record<string, 'ok' | 'degraded' | 'down'>
   timestamp: string
   environment?: string
 }
