@@ -1,0 +1,544 @@
+// Polymarket AI Trading Platform — Prisma Schema
+// PostgreSQL 16, Prisma 5
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum MarketCategory {
+  crypto
+  politics
+  sports
+  events
+  entertainment
+  other
+}
+
+enum MarketStatus {
+  active
+  closed
+  resolved
+  paused
+  excluded
+}
+
+enum DecisionAction {
+  trade
+  hold
+}
+
+enum OrderSide {
+  buy
+  sell
+}
+
+enum OrderType {
+  limit
+  market
+}
+
+enum OrderStatus {
+  pending
+  open
+  partial
+  filled
+  cancelled
+  failed
+  expired
+}
+
+enum MakerTaker {
+  maker
+  taker
+  mixed
+}
+
+enum PositionSide {
+  long
+  short
+}
+
+enum ExitStrategy {
+  resolution_only
+  stop_loss
+  time_based
+  manual
+}
+
+enum CloseReason {
+  resolution
+  stop_loss
+  time_exit
+  manual
+  risk_veto
+}
+
+enum RiskEventType {
+  trade_vetoed
+  size_reduced
+  category_paused
+  global_stop
+  drawdown_limit
+  exposure_limit
+  liquidity_warning
+  latency_warning
+  anomaly_detected
+}
+
+enum Severity {
+  info
+  warning
+  critical
+}
+
+enum AlertType {
+  trade
+  risk
+  system
+  ai
+  performance
+  opportunity
+}
+
+enum AlertSeverity {
+  info
+  warning
+  error
+  critical
+}
+
+enum ReviewType {
+  daily
+  weekly
+  strategy_audit
+  drift_detection
+  threshold_recommendation
+  anomaly_report
+  scorer_calibration
+}
+
+enum RiskScope {
+  global
+  category
+  strategy
+  market
+}
+
+// ─── Markets ─────────────────────────────────────────────────────────────────
+
+model Market {
+  id                  String         @id @default(uuid()) @db.Uuid
+  polymarket_id       String         @unique
+  slug                String?
+  title               String
+  description         String?
+  category            MarketCategory
+  subcategory         String?
+  status              MarketStatus   @default(active)
+  resolution_source   String?
+  resolution_criteria String?
+  outcomes            Json
+  current_prices      Json?
+  volume_24h          Decimal?       @db.Decimal(20, 4)
+  liquidity           Decimal?       @db.Decimal(20, 4)
+  end_date            DateTime?      @db.Timestamptz
+  resolved_outcome    String?
+  tags                String[]
+  metadata            Json?
+  is_tradeable        Boolean        @default(true)
+  exclusion_reason    String?
+  first_seen_at       DateTime       @default(now()) @db.Timestamptz
+  updated_at          DateTime       @updatedAt @db.Timestamptz
+
+  snapshots        MarketSnapshot[]
+  context_scores   ContextScore[]
+  ai_decisions     AiDecision[]
+  orders           Order[]
+  trades           Trade[]
+  positions        Position[]
+  position_history PositionHistory[]
+  risk_events      RiskEvent[]
+
+  @@index([category, status])
+  @@map("markets")
+}
+
+// ─── Time-Series: Market Data ────────────────────────────────────────────────
+
+model MarketSnapshot {
+  id               BigInt   @id @default(autoincrement())
+  market_id        String   @db.Uuid
+  timestamp        DateTime @db.Timestamptz
+  prices           Json
+  spread           Decimal? @db.Decimal(10, 6)
+  volume_1h        Decimal? @db.Decimal(20, 4)
+  liquidity        Decimal? @db.Decimal(20, 4)
+  order_book_depth Json?
+  metadata         Json?
+
+  market Market @relation(fields: [market_id], references: [id])
+
+  @@index([market_id, timestamp(sort: Desc)])
+  @@map("market_snapshots")
+}
+
+model ExternalDataPoint {
+  id        BigInt   @id @default(autoincrement())
+  source    String
+  data_type String
+  symbol    String?
+  timestamp DateTime @db.Timestamptz
+  value     Json
+  metadata  Json?
+
+  @@index([source, data_type, timestamp(sort: Desc)])
+  @@index([symbol, timestamp(sort: Desc)])
+  @@map("external_data_points")
+}
+
+// ─── Scoring ─────────────────────────────────────────────────────────────────
+
+model ContextScore {
+  id             BigInt   @id @default(autoincrement())
+  market_id      String   @db.Uuid
+  category       String
+  timestamp      DateTime @default(now()) @db.Timestamptz
+  scores         Json
+  raw_indicators Json?
+  dashboard_text String?
+
+  market Market @relation(fields: [market_id], references: [id])
+
+  @@index([market_id, timestamp(sort: Desc)])
+  @@index([category, timestamp(sort: Desc)])
+  @@map("context_scores")
+}
+
+model ScorerConfig {
+  id          String   @id @default(uuid()) @db.Uuid
+  category    String
+  scorer_name String
+  description String?
+  is_enabled  Boolean  @default(true)
+  parameters  Json
+  created_at  DateTime @default(now()) @db.Timestamptz
+  updated_at  DateTime @updatedAt @db.Timestamptz
+
+  @@unique([category, scorer_name])
+  @@map("scorer_configs")
+}
+
+// ─── AI Decisions ────────────────────────────────────────────────────────────
+
+model AiDecision {
+  id                BigInt         @id @default(autoincrement())
+  market_id         String         @db.Uuid
+  category          String
+  timestamp         DateTime       @default(now()) @db.Timestamptz
+  cycle_number      Int?
+  dashboard_text    String
+  account_state     Json
+  trade_feedback    Json?
+  action            DecisionAction
+  direction         String?
+  outcome_token     String?
+  confidence        Decimal        @db.Decimal(5, 4)
+  size_hint         Decimal?       @db.Decimal(5, 4)
+  estimated_edge    Decimal?       @db.Decimal(8, 6)
+  estimated_cost    Decimal?       @db.Decimal(8, 6)
+  fair_value        Decimal?       @db.Decimal(8, 6)
+  market_price      Decimal?       @db.Decimal(8, 6)
+  reasoning         String
+  regime_assessment String?
+  regime_confidence Decimal?       @db.Decimal(5, 4)
+  was_executed      Boolean        @default(false)
+  veto_reason       String?
+  order_id          String?        @db.Uuid
+  model_used        String         @default("claude-sonnet-4-20250514")
+  latency_ms        Int?
+  tokens_used       Int?
+  prompt_version    String?
+
+  market           Market           @relation(fields: [market_id], references: [id])
+  /// The order that was placed as a result of this decision
+  executed_order   Order?           @relation("DecisionExecutedOrder", fields: [order_id], references: [id])
+  /// All orders that reference this decision as their source
+  orders           Order[]          @relation("OrderSourceDecision")
+  trades           Trade[]
+  positions        Position[]
+  position_history PositionHistory[]
+  risk_events      RiskEvent[]
+
+  @@index([market_id, timestamp(sort: Desc)])
+  @@index([category, timestamp(sort: Desc)])
+  @@index([action, timestamp(sort: Desc)])
+  @@map("ai_decisions")
+}
+
+model TradeFeedback {
+  id               BigInt   @id @default(autoincrement())
+  category         String
+  session_date     DateTime @db.Date
+  timestamp        DateTime @default(now()) @db.Timestamptz
+  feedback_summary Json
+  feedback_text    String
+
+  @@index([category, session_date(sort: Desc)])
+  @@map("trade_feedback")
+}
+
+// ─── Orders & Trades ─────────────────────────────────────────────────────────
+
+model Order {
+  id                  String      @id @default(uuid()) @db.Uuid
+  decision_id         BigInt?
+  market_id           String      @db.Uuid
+  polymarket_order_id String?
+  side                OrderSide
+  outcome_token       String
+  order_type          OrderType
+  price               Decimal     @db.Decimal(10, 6)
+  size                Decimal     @db.Decimal(20, 6)
+  filled_size         Decimal     @default(0) @db.Decimal(20, 6)
+  avg_fill_price      Decimal?    @db.Decimal(10, 6)
+  status              OrderStatus @default(pending)
+  maker_or_taker      MakerTaker?
+  fees_paid           Decimal     @default(0) @db.Decimal(20, 6)
+  placement_latency_ms Int?
+  error_message       String?
+  created_at          DateTime    @default(now()) @db.Timestamptz
+  updated_at          DateTime    @updatedAt @db.Timestamptz
+  filled_at           DateTime?   @db.Timestamptz
+  cancelled_at        DateTime?   @db.Timestamptz
+
+  market           Market       @relation(fields: [market_id], references: [id])
+  /// The AI decision that triggered creation of this order
+  source_decision  AiDecision?  @relation("OrderSourceDecision", fields: [decision_id], references: [id])
+  /// Any decision that records this order as its executed result
+  from_decisions   AiDecision[] @relation("DecisionExecutedOrder")
+  trades           Trade[]
+
+  @@index([market_id])
+  @@index([decision_id])
+  @@index([status])
+  @@map("orders")
+}
+
+model Trade {
+  id                  String    @id @default(uuid()) @db.Uuid
+  order_id            String    @db.Uuid
+  market_id           String    @db.Uuid
+  decision_id         BigInt?
+  side                OrderSide
+  outcome_token       String
+  size                Decimal   @db.Decimal(20, 6)
+  entry_price         Decimal   @db.Decimal(10, 6)
+  fees                Decimal   @db.Decimal(20, 6)
+  net_cost            Decimal   @db.Decimal(20, 6)
+  regime_at_entry     String?
+  confidence_at_entry Decimal?  @db.Decimal(5, 4)
+  edge_at_entry       Decimal?  @db.Decimal(8, 6)
+  executed_at         DateTime  @default(now()) @db.Timestamptz
+
+  order    Order      @relation(fields: [order_id], references: [id])
+  market   Market     @relation(fields: [market_id], references: [id])
+  decision AiDecision? @relation(fields: [decision_id], references: [id])
+
+  @@index([order_id])
+  @@index([market_id])
+  @@index([executed_at(sort: Desc)])
+  @@map("trades")
+}
+
+// ─── Positions ───────────────────────────────────────────────────────────────
+
+model Position {
+  id              String       @id @default(uuid()) @db.Uuid
+  market_id       String       @db.Uuid
+  outcome_token   String
+  side            PositionSide
+  size            Decimal      @db.Decimal(20, 6)
+  avg_entry_price Decimal      @db.Decimal(10, 6)
+  current_price   Decimal?     @db.Decimal(10, 6)
+  unrealized_pnl  Decimal?     @db.Decimal(20, 6)
+  realized_pnl    Decimal      @default(0) @db.Decimal(20, 6)
+  total_fees      Decimal      @default(0) @db.Decimal(20, 6)
+  decision_id     BigInt?
+  exit_strategy   ExitStrategy @default(resolution_only)
+  stop_loss_price Decimal?     @db.Decimal(10, 6)
+  time_exit_at    DateTime?    @db.Timestamptz
+  opened_at       DateTime     @default(now()) @db.Timestamptz
+  updated_at      DateTime     @updatedAt @db.Timestamptz
+
+  market   Market      @relation(fields: [market_id], references: [id])
+  decision AiDecision? @relation(fields: [decision_id], references: [id])
+
+  @@unique([market_id, outcome_token])
+  @@index([market_id])
+  @@map("positions")
+}
+
+model PositionHistory {
+  id                 String       @id @default(uuid()) @db.Uuid
+  market_id          String       @db.Uuid
+  outcome_token      String
+  side               PositionSide
+  size               Decimal      @db.Decimal(20, 6)
+  avg_entry_price    Decimal      @db.Decimal(10, 6)
+  avg_exit_price     Decimal?     @db.Decimal(10, 6)
+  realized_pnl       Decimal      @db.Decimal(20, 6)
+  total_fees         Decimal      @db.Decimal(20, 6)
+  decision_id        BigInt?
+  regime_at_entry    String?
+  regime_at_exit     String?
+  resolution_outcome String?
+  opened_at          DateTime     @db.Timestamptz
+  closed_at          DateTime     @default(now()) @db.Timestamptz
+  close_reason       CloseReason
+
+  market   Market      @relation(fields: [market_id], references: [id])
+  decision AiDecision? @relation(fields: [decision_id], references: [id])
+
+  @@index([market_id])
+  @@index([closed_at(sort: Desc)])
+  @@map("position_history")
+}
+
+// ─── AI Reviews ──────────────────────────────────────────────────────────────
+
+model AiReview {
+  id              BigInt     @id @default(autoincrement())
+  review_type     ReviewType
+  timestamp       DateTime   @default(now()) @db.Timestamptz
+  period_start    DateTime?  @db.Timestamptz
+  period_end      DateTime?  @db.Timestamptz
+  category        String?
+  findings        Json?
+  recommendations Json?
+  reasoning       String?
+  was_applied     Boolean    @default(false)
+  applied_at      DateTime?  @db.Timestamptz
+  applied_by      String?
+
+  @@index([review_type, timestamp(sort: Desc)])
+  @@map("ai_reviews")
+}
+
+// ─── Risk & Alerts ───────────────────────────────────────────────────────────
+
+model RiskEvent {
+  id            BigInt        @id @default(autoincrement())
+  event_type    RiskEventType
+  timestamp     DateTime      @default(now()) @db.Timestamptz
+  severity      Severity
+  decision_id   BigInt?
+  market_id     String?       @db.Uuid
+  details       Json
+  message       String
+  auto_resolved Boolean       @default(false)
+  resolved_at   DateTime?     @db.Timestamptz
+
+  decision AiDecision? @relation(fields: [decision_id], references: [id])
+  market   Market?     @relation(fields: [market_id], references: [id])
+
+  @@index([event_type, timestamp(sort: Desc)])
+  @@index([decision_id])
+  @@map("risk_events")
+}
+
+model Alert {
+  id           BigInt        @id @default(autoincrement())
+  alert_type   AlertType
+  severity     AlertSeverity
+  title        String
+  message      String
+  data         Json?
+  is_read      Boolean       @default(false)
+  is_dismissed Boolean       @default(false)
+  created_at   DateTime      @default(now()) @db.Timestamptz
+  read_at      DateTime?     @db.Timestamptz
+
+  @@index([is_read, created_at(sort: Desc)])
+  @@map("alerts")
+}
+
+// ─── Bankroll ────────────────────────────────────────────────────────────────
+
+model Bankroll {
+  id                  String   @id @default(uuid()) @db.Uuid
+  total_balance       Decimal  @db.Decimal(20, 6)
+  previous_balance    Decimal  @db.Decimal(20, 6)
+  reserved_balance    Decimal  @db.Decimal(20, 6)
+  active_balance      Decimal  @db.Decimal(20, 6)
+  deployed_balance    Decimal  @db.Decimal(20, 6)
+  unrealized_pnl      Decimal  @db.Decimal(20, 6)
+  balance_delta_today Decimal  @db.Decimal(20, 6)
+  balance_delta_total Decimal  @db.Decimal(20, 6)
+  initial_deposit     Decimal  @db.Decimal(20, 6)
+  updated_at          DateTime @updatedAt @db.Timestamptz
+
+  @@map("bankroll")
+}
+
+model BankrollHistory {
+  id              BigInt   @id @default(autoincrement())
+  date            DateTime @unique @db.Date
+  opening_balance Decimal  @db.Decimal(20, 6)
+  closing_balance Decimal  @db.Decimal(20, 6)
+  deposits        Decimal  @default(0) @db.Decimal(20, 6)
+  withdrawals     Decimal  @default(0) @db.Decimal(20, 6)
+  trading_pnl     Decimal  @db.Decimal(20, 6)
+  fees_total      Decimal  @default(0) @db.Decimal(20, 6)
+  trades_count    Int      @default(0)
+  win_rate        Decimal? @db.Decimal(5, 4)
+
+  @@index([date(sort: Desc)])
+  @@map("bankroll_history")
+}
+
+// ─── Config ──────────────────────────────────────────────────────────────────
+
+model RiskConfig {
+  id          String    @id @default(uuid()) @db.Uuid
+  scope       RiskScope
+  scope_value String?
+  parameters  Json
+  updated_at  DateTime  @updatedAt @db.Timestamptz
+  updated_by  String?
+
+  @@index([scope, scope_value])
+  @@map("risk_config")
+}
+
+model SystemConfig {
+  id          String   @id @default(uuid()) @db.Uuid
+  key         String   @unique
+  value       Json
+  description String?
+  updated_at  DateTime @updatedAt @db.Timestamptz
+
+  @@map("system_config")
+}
+
+// ─── Audit ───────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id           BigInt   @id @default(autoincrement())
+  timestamp    DateTime @default(now()) @db.Timestamptz
+  action       String
+  entity_type  String
+  entity_id    String?
+  changes      Json?
+  performed_by String?
+
+  @@index([entity_type, entity_id])
+  @@index([timestamp(sort: Desc)])
+  @@map("audit_log")
+}

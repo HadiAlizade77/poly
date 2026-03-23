@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+.DS_Store
+coverage/
+.turbo/
+packages/backend/prisma/*.db
+packages/backend/prisma/migrations/**/migration_lock.toml
+test-results/
+playwright-report/

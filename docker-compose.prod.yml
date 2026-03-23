@@ -1,0 +1,68 @@
+# Production overlay — use with: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  postgres:
+    restart: always
+
+  redis:
+    restart: always
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - '3001:3001'
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-polymarket}:${POSTGRES_PASSWORD:-polymarket}@postgres:5432/${POSTGRES_DB:-polymarket}
+      REDIS_URL: redis://redis:6379
+      PORT: 3001
+      JWT_SECRET: ${JWT_SECRET}
+      POLYMARKET_API_KEY: ${POLYMARKET_API_KEY}
+      POLYMARKET_SECRET: ${POLYMARKET_SECRET}
+      POLYMARKET_PASSPHRASE: ${POLYMARKET_PASSPHRASE}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      KILL_SWITCH_ENABLED: ${KILL_SWITCH_ENABLED:-false}
+      MAX_DAILY_LOSS: ${MAX_DAILY_LOSS:-100}
+      MAX_POSITION_SIZE: ${MAX_POSITION_SIZE:-50}
+      MAX_TOTAL_EXPOSURE: ${MAX_TOTAL_EXPOSURE:-500}
+    volumes:
+      - ./logs:/app/logs
+      - ./backups:/app/backups
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:3001/api/health || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  nginx:
+    image: nginx:alpine
+    restart: always
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/ssl/certs/polymarket:ro
+      - ./logs/nginx:/var/log/nginx
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost/api/health || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  pgdata:
+  redisdata:

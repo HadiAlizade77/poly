@@ -1,0 +1,11 @@
+// Shared component barrel — import from here for convenience
+export { DataTable } from '@/components/ui/DataTable'
+export { StatCard } from '@/components/ui/StatCard'
+export { Badge } from '@/components/ui/Badge'
+export { MarketStatusBadge, OrderStatusBadge, SeverityBadge } from '@/components/ui/StatusBadge'
+export { PnlDisplay } from '@/components/ui/PnlDisplay'
+export { PriceDisplay, PercentDisplay } from '@/components/ui/PriceDisplay'
+export { ScoreDimensionBar, ScoreSummary } from '@/components/ui/ScoreDimensionBar'
+export { LoadingSpinner, LoadingPage } from '@/components/ui/LoadingSpinner'
+export { EmptyState } from '@/components/ui/EmptyState'
+export { PageHeader } from '@/components/ui/PageHeader'
