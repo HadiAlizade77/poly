@@ -103,7 +103,7 @@ const decisionStats = {
   executed: 18,
   vetoed: 2,
   avg_confidence: 0.72,
-  avg_edge: 0.04,
+  avg_edge: null,
 };
 
 const orders = [
@@ -166,20 +166,26 @@ const positionHistory = [
   },
 ];
 
-const riskConfig = {
-  id: 'rcfg-001',
-  max_daily_loss: 500,
-  max_position_size: 0.1,
-  max_total_exposure: 2000,
-  max_single_trade: 200,
-  max_consecutive_losses: 5,
-  cooldown_after_loss_streak_minutes: 60,
-  min_liquidity: 1000,
-  max_spread: 0.05,
-  max_latency_ms: 2000,
-  max_data_age_seconds: 60,
-  updated_at: now,
-};
+const riskConfig = [
+  {
+    id: 'rcfg-001',
+    scope: 'global',
+    scope_value: null,
+    parameters: {
+      max_daily_loss: 500,
+      max_position_size_pct: 0.1,
+      max_total_exposure: 2000,
+      max_single_trade: 200,
+      max_consecutive_losses: 5,
+      cooldown_after_loss_streak_minutes: 60,
+      min_liquidity: 1000,
+      max_spread: 0.05,
+      latency_threshold_ms: 2000,
+      min_scorer_data_freshness_seconds: 60,
+    },
+    updated_at: now,
+  },
+];
 
 const riskEvents = [
   {

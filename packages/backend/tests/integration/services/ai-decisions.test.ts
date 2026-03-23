@@ -200,12 +200,12 @@ describe('AiDecisionService.getStats', () => {
     const stats = await AiDecisionService.getStats();
 
     expect(typeof stats.total).toBe('number');
-    expect(typeof stats.tradeCount).toBe('number');
-    expect(typeof stats.holdCount).toBe('number');
-    expect(stats.tradeCount + stats.holdCount).toBe(stats.total);
-    expect(typeof stats.executedCount).toBe('number');
-    expect(typeof stats.vetoedCount).toBe('number');
-    // avgConfidence is null or a number
-    expect(stats.avgConfidence === null || typeof stats.avgConfidence === 'number').toBe(true);
+    expect(typeof stats.trades).toBe('number');
+    expect(typeof stats.holds).toBe('number');
+    expect(stats.trades + stats.holds).toBe(stats.total);
+    expect(typeof stats.executed).toBe('number');
+    expect(typeof stats.vetoed).toBe('number');
+    // avg_confidence is null or a number
+    expect(stats.avg_confidence === null || typeof stats.avg_confidence === 'number').toBe(true);
   });
 });

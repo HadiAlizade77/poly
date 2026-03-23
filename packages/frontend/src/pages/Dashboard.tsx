@@ -22,7 +22,7 @@ const REGIME_COLORS: Record<string, string> = {
 
 function DecisionRow({ d }: { d: AIDecision }) {
   return (
-    <div className="flex items-start gap-3 py-2.5 border-b border-border last:border-0">
+    <div data-testid="decision-row" className="flex items-start gap-3 py-2.5 border-b border-border last:border-0">
       <div
         className={cn(
           'mt-0.5 w-2 h-2 rounded-full shrink-0',

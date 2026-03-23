@@ -418,8 +418,8 @@ describe('Decision Pipeline – Persistence', () => {
 
     const stats = await aiDecisionService.getStats();
     expect(stats.total).toBe(5);
-    expect(stats.tradeCount).toBe(3);
-    expect(stats.holdCount).toBe(2);
-    expect(stats.avgConfidence).not.toBeNull();
+    expect(stats.trades).toBe(3);
+    expect(stats.holds).toBe(2);
+    expect(stats.avg_confidence).not.toBeNull();
   });
 });

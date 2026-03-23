@@ -73,6 +73,20 @@ export async function upsertScorerConfig(
   }
 }
 
+export async function listContextScores(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    // Context scores are generated in-memory by the strategy runner and not persisted.
+    // Return empty array until a persistence layer is added.
+    sendList(res, { items: [], total: 0, page: 1, pageSize: 20, totalPages: 0 });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function toggleScorer(
   req: Request,
   res: Response,

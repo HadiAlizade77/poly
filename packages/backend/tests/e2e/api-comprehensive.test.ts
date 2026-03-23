@@ -723,11 +723,11 @@ describe('GET /api/analytics/summary', () => {
     const res = await request(app).get('/api/analytics/summary');
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.data).toHaveProperty('positions');
-    expect(res.body.data).toHaveProperty('orders');
-    expect(res.body.data).toHaveProperty('alerts');
-    expect(res.body.data).toHaveProperty('trades');
-    expect(res.body.data).toHaveProperty('performance30d');
+    expect(res.body.data).toHaveProperty('total_trades');
+    expect(res.body.data).toHaveProperty('winning_trades');
+    expect(res.body.data).toHaveProperty('win_rate');
+    expect(res.body.data).toHaveProperty('total_pnl');
+    expect(res.body.data).toHaveProperty('by_category');
   });
 });
 

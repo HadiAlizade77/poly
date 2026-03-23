@@ -20,74 +20,55 @@ describe('GET /api/analytics/summary', () => {
     expect(res.body.success).toBe(true);
   });
 
-  it('response has bankroll field (null when empty)', async () => {
+  it('response has total_trades field', async () => {
     const res = await request(app).get('/api/analytics/summary');
 
-    expect(res.body.data).toHaveProperty('bankroll');
-    // no bankroll seeded — should be null
-    expect(res.body.data.bankroll).toBeNull();
+    expect(res.body.data).toHaveProperty('total_trades');
+    expect(typeof res.body.data.total_trades).toBe('number');
   });
 
-  it('response has positions.open field', async () => {
+  it('response has winning_trades and losing_trades fields', async () => {
     const res = await request(app).get('/api/analytics/summary');
 
-    expect(res.body.data.positions).toMatchObject({
-      open: expect.any(Number),
-    });
-    expect(res.body.data.positions.open).toBe(0);
+    expect(typeof res.body.data.winning_trades).toBe('number');
+    expect(typeof res.body.data.losing_trades).toBe('number');
   });
 
-  it('response has orders.open field', async () => {
+  it('response has total_pnl and total_fees fields', async () => {
     const res = await request(app).get('/api/analytics/summary');
 
-    expect(res.body.data.orders).toMatchObject({
-      open: expect.any(Number),
-    });
+    expect(typeof res.body.data.total_pnl).toBe('number');
+    expect(typeof res.body.data.total_fees).toBe('number');
   });
 
-  it('response has alerts.unread field', async () => {
+  it('response has by_category field', async () => {
     const res = await request(app).get('/api/analytics/summary');
 
-    expect(res.body.data.alerts).toMatchObject({
-      unread: expect.any(Number),
-    });
+    expect(res.body.data).toHaveProperty('by_category');
+    expect(typeof res.body.data.by_category).toBe('object');
   });
 
-  it('response has trades counts (24h, 7d, 30d)', async () => {
+  it('avg_pnl_per_trade, best_trade_pnl, worst_trade_pnl, avg_hold_time_hours are null when no trades', async () => {
     const res = await request(app).get('/api/analytics/summary');
 
-    expect(res.body.data.trades).toMatchObject({
-      count24h: expect.any(Number),
-      count7d: expect.any(Number),
-      count30d: expect.any(Number),
-    });
+    expect(res.body.data.avg_pnl_per_trade).toBeNull();
+    expect(res.body.data.best_trade_pnl).toBeNull();
+    expect(res.body.data.worst_trade_pnl).toBeNull();
+    expect(res.body.data.avg_hold_time_hours).toBeNull();
   });
 
-  it('response has performance30d with expected keys', async () => {
+  it('win_rate is null when no closed positions', async () => {
     const res = await request(app).get('/api/analytics/summary');
 
-    expect(res.body.data.performance30d).toMatchObject({
-      closedPositions: expect.any(Number),
-      winCount: expect.any(Number),
-      lossCount: expect.any(Number),
-      decisions: expect.any(Number),
-      decisionsExecuted: expect.any(Number),
-    });
+    expect(res.body.data.total_trades).toBe(0);
+    expect(res.body.data.win_rate).toBeNull();
   });
 
-  it('winRate is null when no closed positions', async () => {
+  it('total_trades is 0 in empty DB', async () => {
     const res = await request(app).get('/api/analytics/summary');
 
-    // No position_history seeded
-    expect(res.body.data.performance30d.closedPositions).toBe(0);
-    expect(res.body.data.performance30d.winRate).toBeNull();
-  });
-
-  it('trade counts are 0 in empty DB', async () => {
-    const res = await request(app).get('/api/analytics/summary');
-
-    expect(res.body.data.trades.count24h).toBe(0);
-    expect(res.body.data.trades.count7d).toBe(0);
-    expect(res.body.data.trades.count30d).toBe(0);
+    expect(res.body.data.total_trades).toBe(0);
+    expect(res.body.data.winning_trades).toBe(0);
+    expect(res.body.data.losing_trades).toBe(0);
   });
 });

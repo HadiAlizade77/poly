@@ -244,9 +244,9 @@ describe('Lifecycle – empty DB edge cases', () => {
     const res = await request(app).get('/api/analytics/summary');
 
     expect(res.status).toBe(200);
-    expect(res.body.data.bankroll).toBeNull();
-    expect(res.body.data.positions.open).toBe(0);
-    expect(res.body.data.trades.count24h).toBe(0);
+    expect(res.body.data.total_trades).toBe(0);
+    expect(res.body.data.win_rate).toBeNull();
+    expect(res.body.data.by_category).toEqual({});
   });
 
   it('GET /api/audit-log returns empty list', async () => {

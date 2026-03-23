@@ -5,6 +5,12 @@ import 'dotenv/config';
   return this.toString();
 };
 
+// Make Prisma Decimal JSON-serializable as numbers (not strings)
+import { Prisma } from '@prisma/client';
+(Prisma.Decimal.prototype as unknown as { toJSON: () => number }).toJSON = function (): number {
+  return parseFloat(this.toString());
+};
+
 import express from 'express';
 import { createServer } from 'http';
 import helmet from 'helmet';
@@ -39,7 +45,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Rate limiting
-app.use(rateLimiter({ windowMs: 60_000, maxRequests: 200 }));
+app.use(rateLimiter({ windowMs: 60_000, maxRequests: 1000 }));
 
 // Routes
 app.use('/api', routes);

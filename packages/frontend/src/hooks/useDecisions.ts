@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/react-query'
 import type { AIDecision } from '@polymarket/shared'
 import { api } from '@/lib/api'
 
+interface Paginated<T> { data: T[]; meta: unknown }
+
 interface DecisionStats {
   total: number
   trades: number
@@ -22,13 +24,14 @@ export const decisionKeys = {
 export function useDecisions(filters?: { market_id?: string; action?: string; limit?: number }) {
   return useQuery({
     queryKey: decisionKeys.list(filters),
-    queryFn: () => {
+    queryFn: async () => {
       const params = new URLSearchParams()
       if (filters?.market_id) params.set('market_id', filters.market_id)
       if (filters?.action) params.set('action', filters.action)
       if (filters?.limit) params.set('limit', String(filters.limit))
       const qs = params.toString()
-      return api.get<AIDecision[]>(`/api/decisions${qs ? `?${qs}` : ''}`)
+      const result = await api.get<Paginated<AIDecision> | AIDecision[]>(`/api/decisions${qs ? `?${qs}` : ''}`)
+      return Array.isArray(result) ? result : (result as Paginated<AIDecision>).data
     },
     staleTime: 15_000,
   })

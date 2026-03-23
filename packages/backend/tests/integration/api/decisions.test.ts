@@ -87,10 +87,10 @@ describe('GET /api/decisions/stats', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(typeof res.body.data.total).toBe('number');
-    expect(typeof res.body.data.tradeCount).toBe('number');
-    expect(typeof res.body.data.holdCount).toBe('number');
-    expect(typeof res.body.data.executedCount).toBe('number');
-    expect(res.body.data.tradeCount + res.body.data.holdCount).toBe(res.body.data.total);
+    expect(typeof res.body.data.trades).toBe('number');
+    expect(typeof res.body.data.holds).toBe('number');
+    expect(typeof res.body.data.executed).toBe('number');
+    expect(res.body.data.trades + res.body.data.holds).toBe(res.body.data.total);
   });
 });
 

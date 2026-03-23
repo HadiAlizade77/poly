@@ -145,7 +145,7 @@ function OpenPositionsTab({ positions, isLoading }: { positions: Position[] | un
       </div>
 
       {positions?.length === 0 && !isLoading ? (
-        <EmptyState icon={<Wallet className="w-6 h-6 text-muted-foreground" />} title="No open positions" message="Positions appear once trades execute." />
+        <EmptyState icon={<Wallet className="w-6 h-6 text-muted-foreground" />} title="No positions" message="Positions appear once trades execute." />
       ) : (
         <DataTable columns={openColumns} data={positions ?? []} loading={isLoading} pageSize={20} getRowId={(r) => r.id} />
       )}

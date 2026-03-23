@@ -24,11 +24,12 @@ export interface AiDecisionFilter {
 
 export interface AiDecisionStats {
   total: number;
-  tradeCount: number;
-  holdCount: number;
-  executedCount: number;
-  vetoedCount: number;
-  avgConfidence: number | null;
+  trades: number;
+  holds: number;
+  executed: number;
+  vetoed: number;
+  avg_confidence: number | null;
+  avg_edge: null;
 }
 
 export async function findByMarket(
@@ -138,10 +139,11 @@ export async function getStats(since?: Date): Promise<AiDecisionStats> {
 
   return {
     total,
-    tradeCount,
-    holdCount,
-    executedCount,
-    vetoedCount,
-    avgConfidence: avg !== null ? Number(avg) : null,
+    trades: tradeCount,
+    holds: holdCount,
+    executed: executedCount,
+    vetoed: vetoedCount,
+    avg_confidence: avg !== null ? Number(avg) : null,
+    avg_edge: null,
   };
 }

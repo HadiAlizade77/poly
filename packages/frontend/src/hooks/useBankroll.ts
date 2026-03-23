@@ -2,6 +2,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { Bankroll, BankrollHistory } from '@polymarket/shared'
 import { api } from '@/lib/api'
 
+interface Paginated<T> { data: T[]; meta: unknown }
+
 export const bankrollKeys = {
   current: ['bankroll'] as const,
   history: ['bankroll', 'history'] as const,
@@ -19,7 +21,10 @@ export function useBankroll() {
 export function useBankrollHistory() {
   return useQuery({
     queryKey: bankrollKeys.history,
-    queryFn: () => api.get<BankrollHistory[]>('/api/bankroll/history'),
+    queryFn: async () => {
+      const result = await api.get<Paginated<BankrollHistory> | BankrollHistory[]>('/api/bankroll/history')
+      return Array.isArray(result) ? result : (result as Paginated<BankrollHistory>).data
+    },
     staleTime: 5 * 60_000,
   })
 }

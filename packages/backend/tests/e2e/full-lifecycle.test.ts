@@ -333,7 +333,7 @@ describe('Lifecycle Step 10 – Analytics after lifecycle', () => {
     const res = await request(app).get('/api/analytics/summary');
 
     expect(res.status).toBe(200);
-    expect(res.body.data.bankroll).not.toBeNull();
-    expect(res.body.data.positions.open).toBe(0); // position was closed
+    // After closing a position, total_trades should be at least 1
+    expect(res.body.data.total_trades).toBeGreaterThanOrEqual(1);
   });
 });

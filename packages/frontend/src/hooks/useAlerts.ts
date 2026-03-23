@@ -2,6 +2,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { Alert } from '@polymarket/shared'
 import { api } from '@/lib/api'
 
+interface Paginated<T> { data: T[]; meta: unknown }
+
 export const alertKeys = {
   all: ['alerts'] as const,
   list: (filters?: Record<string, unknown>) => ['alerts', 'list', filters] as const,
@@ -11,12 +13,13 @@ export const alertKeys = {
 export function useAlerts(filters?: { unread_only?: boolean; limit?: number }) {
   return useQuery({
     queryKey: alertKeys.list(filters),
-    queryFn: () => {
+    queryFn: async () => {
       const params = new URLSearchParams()
       if (filters?.unread_only) params.set('unread_only', 'true')
       if (filters?.limit) params.set('limit', String(filters.limit))
       const qs = params.toString()
-      return api.get<Alert[]>(`/api/alerts${qs ? `?${qs}` : ''}`)
+      const result = await api.get<Paginated<Alert> | Alert[]>(`/api/alerts${qs ? `?${qs}` : ''}`)
+      return Array.isArray(result) ? result : (result as Paginated<Alert>).data
     },
     staleTime: 10_000,
     refetchInterval: 30_000,

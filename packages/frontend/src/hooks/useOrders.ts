@@ -2,6 +2,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { Order, OrderStatus } from '@polymarket/shared'
 import { api } from '@/lib/api'
 
+interface Paginated<T> { data: T[]; meta: unknown }
+
 export const orderKeys = {
   all: ['orders'] as const,
   list: (filters?: Record<string, unknown>) => ['orders', 'list', filters] as const,
@@ -11,13 +13,14 @@ export const orderKeys = {
 export function useOrders(filters?: { market_id?: string; status?: OrderStatus; limit?: number }) {
   return useQuery({
     queryKey: orderKeys.list(filters),
-    queryFn: () => {
+    queryFn: async () => {
       const params = new URLSearchParams()
       if (filters?.market_id) params.set('market_id', filters.market_id)
       if (filters?.status) params.set('status', filters.status)
       if (filters?.limit) params.set('limit', String(filters.limit))
       const qs = params.toString()
-      return api.get<Order[]>(`/api/orders${qs ? `?${qs}` : ''}`)
+      const result = await api.get<Paginated<Order> | Order[]>(`/api/orders${qs ? `?${qs}` : ''}`)
+      return Array.isArray(result) ? result : (result as Paginated<Order>).data
     },
     staleTime: 10_000,
   })
