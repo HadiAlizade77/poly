@@ -1,16 +1,161 @@
 import { formatDistanceToNow } from 'date-fns'
-import { AlertTriangle, TrendingUp, Activity, Brain } from 'lucide-react'
+import { useState } from 'react'
+import {
+  AlertTriangle, TrendingUp, Activity, Brain,
+  Zap, Info, ChevronDown, ChevronRight,
+  ShoppingCart, Wallet, Shield,
+} from 'lucide-react'
+import { useAppStore, type TradingState } from '@/stores/app.store'
+import { useTradingState } from '@/hooks/useTradingState'
 import { useBankroll } from '@/hooks/useBankroll'
 import { useDecisions } from '@/hooks/useDecisions'
 import { useAlerts } from '@/hooks/useAlerts'
 import { usePositions } from '@/hooks/usePositions'
 import { useHealth } from '@/hooks/useSystemConfig'
+import { useSystemHealth } from '@/hooks/useSystemHealth'
+import { useCredentials } from '@/hooks/useSettingsCredentials'
 import { StatCard } from '@/components/ui/StatCard'
 import { PnlDisplay } from '@/components/ui/PnlDisplay'
 import { Badge } from '@/components/ui/Badge'
 import { SeverityBadge } from '@/components/ui/StatusBadge'
 import { cn } from '@/lib/utils'
 import type { AIDecision, Alert } from '@polymarket/shared'
+import { GettingStarted } from '@/components/onboarding/GettingStarted'
+
+// ─── Engine status panel ───────────────────────────────────────────────────────
+
+const PIPELINE_STEPS = [
+  { icon: TrendingUp,   text: 'Scanner discovers active markets from Polymarket',       timing: 'every 60s'   },
+  { icon: Activity,     text: 'Context scorers assess market conditions per category',   timing: 'continuous'  },
+  { icon: Brain,        text: 'AI analyzes each market and decides trade or hold',        timing: 'every 5 min' },
+  { icon: Shield,       text: 'Risk governor approves, reduces, or vetoes trades',        timing: 'per decision'},
+  { icon: ShoppingCart, text: 'Executor places approved orders on Polymarket',            timing: 'immediate'   },
+  { icon: Wallet,       text: 'Exit monitor manages open positions automatically',        timing: 'every 30s'   },
+]
+
+const ENGINE_PROCESSES = [
+  { name: 'market-scanner',    label: 'Market Scanner',     desc: 'Fetches markets every 60s'   },
+  { name: 'decision-engine',   label: 'AI Decision Engine', desc: 'Evaluates markets every 5min'},
+  { name: 'execution-manager', label: 'Trade Executor',     desc: 'Places orders & monitors exits'},
+  { name: 'ai-reviewer',       label: 'AI Reviewer',        desc: 'Analyzes performance daily'  },
+]
+
+function statusDotClass(status: string) {
+  return cn(
+    'w-2 h-2 rounded-full shrink-0',
+    status === 'running' ? 'bg-profit' :
+    status === 'errored' ? 'bg-loss animate-pulse' :
+    'bg-slate-600'
+  )
+}
+
+function HowItWorks() {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-slate-300 transition-colors"
+      >
+        {expanded
+          ? <ChevronDown className="w-3.5 h-3.5" />
+          : <ChevronRight className="w-3.5 h-3.5" />}
+        How the automated pipeline works
+      </button>
+      {expanded && (
+        <div className="mt-3 space-y-2 pl-1">
+          {PIPELINE_STEPS.map((step, i) => (
+            <div key={i} className="flex items-center gap-3">
+              <div className="flex items-center justify-center w-5 h-5 rounded-full bg-surface-2 shrink-0">
+                <span className="text-xs font-numeric text-muted-foreground">{i + 1}</span>
+              </div>
+              <step.icon className="w-4 h-4 text-muted-foreground shrink-0" />
+              <span className="text-xs text-slate-300 flex-1">{step.text}</span>
+              <span className="text-xs text-muted-foreground shrink-0">{step.timing}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const TRADING_STATE_BADGE: Record<TradingState, { variant: 'success' | 'danger' | 'warning' | 'default'; label: string }> = {
+  running:       { variant: 'success', label: 'RUNNING' },
+  stopped:       { variant: 'danger',  label: 'STOPPED' },
+  paused_all:    { variant: 'warning', label: 'PAUSED' },
+  paused_sells:  { variant: 'warning', label: 'SELLS PAUSED' },
+}
+
+function EngineStatusPanel() {
+  const { health } = useSystemHealth()
+  const { data: creds } = useCredentials()
+  const tradingState = useAppStore((s) => s.tradingState)
+
+  // Ensure trading state is loaded from backend
+  useTradingState()
+
+  const hasApiKey = Boolean(creds?.polymarket_api_key && creds.polymarket_api_key.length > 0)
+  const mode = hasApiKey ? 'live' : 'demo'
+  const stateBadge = TRADING_STATE_BADGE[tradingState]
+
+  const getServiceStatus = (name: string): string => {
+    const svc = health?.services?.find(s => s.name === name)
+    return svc?.status ?? 'unknown'
+  }
+
+  return (
+    <div className="bg-surface rounded-lg border border-border">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="flex items-center gap-2">
+          <Zap className="w-4 h-4 text-info" />
+          <h2 className="text-sm font-medium text-slate-200">Automated Trading Engine</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant={stateBadge.variant}>{stateBadge.label}</Badge>
+          <Badge variant={mode === 'live' ? 'warning' : 'default'}>
+            {mode === 'live' ? 'LIVE' : 'DEMO'}
+          </Badge>
+        </div>
+      </div>
+
+      <div className="p-4 space-y-4">
+        {/* Process status grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {ENGINE_PROCESSES.map(p => {
+            const status = getServiceStatus(p.name)
+            return (
+              <div key={p.name} className="flex items-center gap-2 bg-surface-2 rounded-md px-3 py-2">
+                <span className={statusDotClass(status)} />
+                <div className="min-w-0">
+                  <p className="text-xs font-medium text-slate-300 truncate">{p.label}</p>
+                  <p className="text-xs text-muted-foreground truncate">{p.desc}</p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        {/* How it works — collapsible */}
+        <HowItWorks />
+
+        {/* Mode explanation */}
+        {mode === 'demo' && (
+          <div className="flex items-center gap-2 bg-info/10 border border-info/20 rounded-md px-3 py-2 text-xs text-info">
+            <Info className="w-4 h-4 shrink-0" />
+            <span>
+              Running in demo mode with simulated markets. Add your Polymarket API key in{' '}
+              Settings to trade with real funds.
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Regime / decision helpers ────────────────────────────────────────────────
 
 const REGIME_COLORS: Record<string, string> = {
   quiet: 'text-info',
@@ -91,6 +236,10 @@ export default function Dashboard() {
         <h1 className="text-2xl font-semibold text-slate-100">Dashboard</h1>
         <p className="text-sm text-muted-foreground mt-0.5">Portfolio overview and recent activity</p>
       </div>
+
+      <GettingStarted />
+
+      <EngineStatusPanel />
 
       {/* Stat row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

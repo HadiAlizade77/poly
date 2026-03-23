@@ -92,3 +92,51 @@ export function useToggleKillSwitch() {
     },
   })
 }
+
+export function useAutoTuneStatus() {
+  return useQuery({
+    queryKey: ['risk', 'auto-tune'],
+    queryFn: () => api.get<{ enabled: boolean; lastTunedBalance: number | null }>('/api/risk/auto-tune'),
+    staleTime: 30_000,
+  })
+}
+
+export function useAutoTuneRisk() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ config: RiskConfig; balance: number; tier: string; message: string }>('/api/risk/auto-tune'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['risk'] })
+    },
+  })
+}
+
+export function useDisableAutoTune() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.delete<{ enabled: boolean }>('/api/risk/auto-tune'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['risk', 'auto-tune'] })
+    },
+  })
+}
+
+export function useRiskAppetite() {
+  return useQuery({
+    queryKey: ['risk-appetite'],
+    queryFn: () => api.get<{ appetite: number }>('/api/risk/appetite').then((d) => d.appetite ?? 5),
+    staleTime: 30_000,
+  })
+}
+
+export function useUpdateRiskAppetite() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (appetite: number) =>
+      api.patch<unknown>('/api/risk/appetite', { appetite }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['risk-appetite'] })
+    },
+  })
+}

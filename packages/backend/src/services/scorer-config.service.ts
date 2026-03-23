@@ -1,6 +1,7 @@
 import { type ScorerConfig, type Prisma } from '@prisma/client';
 import prisma from '../config/database.js';
 import { withPrismaError, NotFoundError } from './errors.js';
+import { create as createAuditLog } from './audit-log.service.js';
 
 export async function findAll(): Promise<ScorerConfig[]> {
   return prisma.scorerConfig.findMany({
@@ -40,9 +41,17 @@ export async function findByCategoryAndName(
 export async function create(
   data: Prisma.ScorerConfigUncheckedCreateInput,
 ): Promise<ScorerConfig> {
-  return withPrismaError('ScorerConfig', () =>
+  const result = await withPrismaError('ScorerConfig', () =>
     prisma.scorerConfig.create({ data }) as Promise<ScorerConfig>,
   );
+  void createAuditLog(
+    'scorer_created',
+    'scorer_config',
+    result.id,
+    { category: result.category, scorer_name: result.scorer_name },
+    'user',
+  ).catch(() => {});
+  return result;
 }
 
 export async function update(
@@ -70,10 +79,18 @@ export async function upsert(
 
 export async function toggleEnabled(id: string): Promise<ScorerConfig> {
   const existing = await findById(id);
-  return prisma.scorerConfig.update({
+  const result = await (prisma.scorerConfig.update({
     where: { id },
     data: { is_enabled: !(existing as { is_enabled: boolean }).is_enabled },
-  }) as Promise<ScorerConfig>;
+  }) as Promise<ScorerConfig>);
+  void createAuditLog(
+    'scorer_toggled',
+    'scorer_config',
+    result.id,
+    { category: result.category, scorer_name: result.scorer_name, is_enabled: result.is_enabled },
+    'user',
+  ).catch(() => {});
+  return result;
 }
 
 export async function remove(id: string): Promise<ScorerConfig> {

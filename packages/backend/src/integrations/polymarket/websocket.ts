@@ -20,6 +20,8 @@ import type { WsMarketEvent, WsPriceChangeEvent } from './types.js';
 const WS_URL = 'wss://ws-subscriptions-clob.polymarket.com/ws/market';
 const RECONNECT_BASE_MS  = 2_000;
 const RECONNECT_MAX_MS   = 60_000;
+const STABLE_AFTER_MS    = 30_000;  // only reset backoff after connection lives this long
+const MAX_RAPID_FAILURES = 5;       // switch to demo after N rapid disconnects
 const DEMO_TICK_MS       = 5_000;
 
 export declare interface PolymarketWebSocket {
@@ -36,6 +38,8 @@ export class PolymarketWebSocket extends EventEmitter {
   private demoTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectDelay = RECONNECT_BASE_MS;
+  private rapidFailures = 0;
+  private connectTime = 0;
   private stopped = false;
 
   constructor(options: { demoMode?: boolean } = {}) {
@@ -105,7 +109,7 @@ export class PolymarketWebSocket extends EventEmitter {
 
     this.socket.onopen = () => {
       logger.info('PolymarketWebSocket: connected');
-      this.reconnectDelay = RECONNECT_BASE_MS;
+      this.connectTime = Date.now();
       this.emit('connect');
 
       if (this.subscribedTokens.size > 0) {
@@ -133,10 +137,35 @@ export class PolymarketWebSocket extends EventEmitter {
     };
 
     this.socket.onclose = (event) => {
-      logger.info('PolymarketWebSocket: disconnected', { code: event.code, reason: event.reason });
+      const uptime = Date.now() - this.connectTime;
+      logger.info('PolymarketWebSocket: disconnected', { code: event.code, reason: event.reason, uptimeMs: uptime });
       this.emit('disconnect', event.reason);
       this.socket = null;
-      if (!this.stopped) this.scheduleReconnect();
+
+      if (this.stopped) return;
+
+      // If connection was stable, reset backoff and failure count
+      if (uptime >= STABLE_AFTER_MS) {
+        this.reconnectDelay = RECONNECT_BASE_MS;
+        this.rapidFailures = 0;
+        this.scheduleReconnect();
+        return;
+      }
+
+      // Rapid failure — connection dropped almost immediately
+      this.rapidFailures++;
+      if (this.rapidFailures >= MAX_RAPID_FAILURES) {
+        logger.warn(
+          'PolymarketWebSocket: too many rapid disconnects, falling back to demo mode',
+          { failures: this.rapidFailures },
+        );
+        this.rapidFailures = 0;
+        this.reconnectDelay = RECONNECT_BASE_MS;
+        this.startDemoTicker();
+        return;
+      }
+
+      this.scheduleReconnect();
     };
   }
 

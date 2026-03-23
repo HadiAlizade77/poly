@@ -12,6 +12,10 @@ import bankrollRoutes from './bankroll.routes.js';
 import alertRoutes from './alert.routes.js';
 import analyticsRoutes from './analytics.routes.js';
 import auditLogRoutes from './audit-log.routes.js';
+import settingsRoutes from './settings.routes.js';
+import aiRoutes from './ai.routes.js';
+import sandboxRoutes from './sandbox.routes.js';
+import btcBotRoutes from './btc-bot.routes.js';
 
 const router = Router();
 
@@ -28,5 +32,9 @@ router.use('/bankroll', bankrollRoutes);
 router.use('/alerts', alertRoutes);
 router.use('/analytics', analyticsRoutes);
 router.use('/audit-log', auditLogRoutes);
+router.use('/settings', settingsRoutes);
+router.use('/ai', aiRoutes);
+router.use('/sandbox', sandboxRoutes);
+router.use('/btc-bot', btcBotRoutes);
 
 export default router;

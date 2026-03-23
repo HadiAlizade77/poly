@@ -3,15 +3,41 @@ import * as systemConfigService from '../services/system-config.service.js';
 import { sendItem } from '../utils/response.js';
 import { config } from '../config/env.js';
 import { NotFoundError } from '../services/errors.js';
+import prisma from '../config/database.js';
+import { redis } from '../config/redis.js';
+import { getPm2Services } from '../services/health-emitter.js';
 
-export function getHealth(_req: Request, res: Response): void {
+export async function getHealth(_req: Request, res: Response): Promise<void> {
+  let db: 'ok' | 'error' = 'ok';
+  let redisStatus: 'ok' | 'error' = 'ok';
+
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch {
+    db = 'error';
+  }
+
+  redisStatus = redis.status === 'ready' ? 'ok' : 'error';
+
+  const mem = process.memoryUsage();
+  const services = getPm2Services();
+
   res.json({
     success: true,
     data: {
-      status: 'ok',
+      status: db === 'ok' && redisStatus === 'ok' ? 'ok' : 'degraded',
       uptime: process.uptime(),
       timestamp: new Date().toISOString(),
       environment: config.NODE_ENV,
+      db,
+      redis: redisStatus,
+      connections: 0,
+      memory: {
+        heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024),
+        heapTotalMb: Math.round(mem.heapTotal / 1024 / 1024),
+        rssMb: Math.round(mem.rss / 1024 / 1024),
+      },
+      services,
     },
   });
 }

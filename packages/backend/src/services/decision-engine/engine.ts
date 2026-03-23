@@ -26,11 +26,12 @@ import * as systemConfigService from '../system-config.service.js';
 import { scorerRegistry } from './scorer-registry.js';
 import { buildDashboard } from './dashboard-builder/builder.js';
 import type { ScorerInput, ScoredDimensions } from './scorer.interface.js';
-import { makeDecision } from '../ai/decision-maker.js';
+import { makeDecision, screenMarkets, type ScreeningMarket } from '../ai/decision-maker.js';
 import { buildSessionFeedback } from './feedback/builder.js';
 import { PROMPT_VERSION } from '../ai/prompt-manager.js';
 import { riskGovernor, recordMarketTrade } from '../risk/governor.js';
 import { executionEngine } from '../execution/engine.js';
+import { getState as getTradingState } from '../trading-state.service.js';
 import prisma from '../../config/database.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -38,6 +39,10 @@ import prisma from '../../config/database.js';
 const DEFAULT_INTERVAL_MS    = 300_000; // 5 minutes
 const SNAPSHOT_LOOKBACK      = 20;      // snapshots per market
 const EXTERNAL_DATA_LOOKBACK = 50;      // external data points per market
+const MAX_MARKETS_PER_CYCLE  = 20;      // limit AI calls per cycle to control costs
+// MIN_LIQUIDITY and MIN_VOLUME_24H are now computed per-cycle based on risk appetite
+const BASE_MIN_LIQUIDITY     = 5_000;   // base value at appetite=5
+const BASE_MIN_VOLUME_24H    = 100;     // base value at appetite=5
 const CATEGORIES = ['crypto', 'politics', 'sports', 'events', 'entertainment'] as const;
 export type EngineCategory = typeof CATEGORIES[number];
 
@@ -100,20 +105,47 @@ export class DecisionEngine {
   // ─── Main cycle ─────────────────────────────────────────────────────────────
 
   private async runCycle(): Promise<void> {
-    const startMs = Date.now();
-    logger.info('DecisionEngine: cycle started', { category: this.category });
-
-    // ── 1. Fetch active tradeable markets ────────────────────────────────────
-    const markets = await marketService.findTradeable(
-      this.category as Market['category'],
-    );
-
-    if (markets.length === 0) {
-      logger.info('DecisionEngine: no tradeable markets', { category: this.category });
+    // ── 0. Check trading state ─────────────────────────────────────────────
+    const tradingState = await getTradingState();
+    if (tradingState === 'stopped' || tradingState === 'paused_all') {
+      logger.debug('DecisionEngine: skipping cycle — trading state is ' + tradingState, {
+        category: this.category,
+      });
       return;
     }
 
-    // ── 2. Load shared account state once per cycle ──────────────────────────
+    const startMs = Date.now();
+    logger.info('DecisionEngine: cycle started', { category: this.category });
+
+    // ── 1. Load risk appetite and compute quality thresholds ──────────────
+    const riskAppetite = (await systemConfigService.getValue<number>('RISK_APPETITE')) ?? 5;
+    const appetiteScale = riskAppetite / 5; // 1.0 at default, 2.0 at max, 0.2 at min
+    const minLiquidity = Math.max(1_000, BASE_MIN_LIQUIDITY / appetiteScale);
+    const minVolume24h = Math.max(10, BASE_MIN_VOLUME_24H / appetiteScale);
+
+    // ── 2. Fetch active tradeable markets (pre-filtered for quality) ───────
+    const allMarkets = await marketService.findTradeable(
+      this.category as Market['category'],
+    );
+
+    // Filter out illiquid/dead markets to avoid wasting AI tokens
+    const markets = allMarkets
+      .filter((m) => {
+        const liq = Number(m.liquidity ?? 0);
+        const vol = Number(m.volume_24h ?? 0);
+        return liq >= minLiquidity && vol >= minVolume24h;
+      })
+      .slice(0, MAX_MARKETS_PER_CYCLE);
+
+    if (markets.length === 0) {
+      logger.info('DecisionEngine: no tradeable markets above quality threshold', {
+        category: this.category,
+        totalActive: allMarkets.length,
+      });
+      return;
+    }
+
+    // ── 3. Load shared account state once per cycle ──────────────────────────
     const [bankroll, allPositions, feedbackPage] = await Promise.all([
       bankrollService.get(),
       positionService.findAll(),
@@ -121,7 +153,7 @@ export class DecisionEngine {
     ]);
     const recentFeedback = feedbackPage.items;
 
-    // ── 3. Get enabled scorers ────────────────────────────────────────────────
+    // ── 4. Get enabled scorers ────────────────────────────────────────────────
     const scorers = await scorerRegistry.getEnabledScorers(this.category);
 
     logger.info('DecisionEngine: processing markets', {
@@ -130,10 +162,45 @@ export class DecisionEngine {
       scorers:  scorers.length,
     });
 
-    // ── 4. Per-market loop ────────────────────────────────────────────────────
-    for (const market of markets) {
+    // ── 5. Stage 1 — AI screening (one cheap call for all markets) ──────────
+    const screeningInput: ScreeningMarket[] = markets.map((m, i) => {
+      const prices = (m.current_prices ?? {}) as Record<string, number>;
+      const priceValues = Object.values(prices);
+      const yesPrice = priceValues[0] ?? 0.5;
+      const noPrice  = priceValues[1] ?? (1 - yesPrice);
+      return {
+        row:       i + 1,
+        title:     m.title,
+        yesPrice,
+        noPrice,
+        spread:    Math.abs(1 - yesPrice - noPrice),
+        liquidity: Number(m.liquidity ?? 0),
+        volume24h: Number(m.volume_24h ?? 0),
+        expiry:    m.end_date ? new Date(m.end_date).toISOString().slice(0, 10) : null,
+      };
+    });
+
+    const selectedRows = await screenMarkets(
+      this.category,
+      screeningInput,
+      riskAppetite,
+    );
+
+    const selectedMarkets = selectedRows
+      .map((row) => markets[row - 1])
+      .filter(Boolean);
+
+    logger.info('DecisionEngine: screening result', {
+      category:   this.category,
+      screened:   markets.length,
+      selected:   selectedMarkets.length,
+      rows:       selectedRows,
+    });
+
+    // ── 6. Stage 2 — deep analysis only on selected markets ────────────────
+    for (const market of selectedMarkets) {
       try {
-        await this.processMarket(market, scorers, bankroll, allPositions, recentFeedback);
+        await this.processMarket(market, scorers, bankroll, allPositions, recentFeedback, riskAppetite);
       } catch (err) {
         logger.error('DecisionEngine: market processing failed', {
           category: this.category,
@@ -158,6 +225,7 @@ export class DecisionEngine {
     bankroll: Awaited<ReturnType<typeof bankrollService.get>>,
     allPositions: Awaited<ReturnType<typeof positionService.findAll>>,
     recentFeedback: TradeFeedback[],
+    riskAppetite: number,
   ): Promise<void> {
     // ── Gather data ──────────────────────────────────────────────────────────
     const [snapshotPage, externalDataRaw] = await Promise.all([
@@ -229,6 +297,7 @@ export class DecisionEngine {
       dashboardText,
       category: this.category,
       scores,
+      riskAppetite,
     });
 
     // Persist AI decision record

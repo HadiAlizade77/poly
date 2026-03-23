@@ -7,6 +7,7 @@ import {
 import prisma from '../config/database.js';
 import { withPrismaError, NotFoundError } from './errors.js';
 import { emitOrderUpdate } from '../websocket/emit.js';
+import { create as createAuditLog } from './audit-log.service.js';
 import {
   buildPaginatedResult,
   getPaginationArgs,
@@ -74,6 +75,13 @@ export async function create(data: Prisma.OrderUncheckedCreateInput): Promise<Or
     prisma.order.create({ data }) as Promise<Order>,
   );
   emitOrderUpdate(result.id, result.status, result);
+  void createAuditLog(
+    'order_created',
+    'order',
+    result.id,
+    { side: result.side, status: result.status, price: Number(result.price), size: Number(result.size), outcome_token: result.outcome_token },
+    'execution-engine',
+  ).catch(() => {});
   return result;
 }
 
@@ -117,6 +125,13 @@ export async function updateStatus(
     }) as Promise<Order>,
   );
   emitOrderUpdate(result.id, result.status, result);
+  void createAuditLog(
+    `order_${status}`,
+    'order',
+    result.id,
+    { status, side: result.side, outcome_token: result.outcome_token, ...(extra?.avgFillPrice && { avgFillPrice: extra.avgFillPrice }) },
+    'execution-engine',
+  ).catch(() => {});
   return result;
 }
 

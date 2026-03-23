@@ -7,6 +7,7 @@ import {
 import prisma from '../config/database.js';
 import { withPrismaError, NotFoundError } from './errors.js';
 import { emitRiskEvent } from '../websocket/emit.js';
+import { create as createAuditLog } from './audit-log.service.js';
 import {
   buildPaginatedResult,
   getPaginationArgs,
@@ -78,6 +79,13 @@ export async function create(
     prisma.riskEvent.create({ data }) as Promise<RiskEvent>,
   );
   emitRiskEvent(result.event_type, result.severity, result);
+  void createAuditLog(
+    'risk_event',
+    'risk_event',
+    result.id.toString(),
+    { event_type: result.event_type, severity: result.severity, message: result.message },
+    'risk-governor',
+  ).catch(() => {});
   return result;
 }
 

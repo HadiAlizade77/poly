@@ -2,6 +2,7 @@ import { type Position, type ExitStrategy, type Prisma } from '@prisma/client';
 import prisma from '../config/database.js';
 import { withPrismaError, NotFoundError } from './errors.js';
 import { emitPositionUpdate } from '../websocket/emit.js';
+import { create as createAuditLog } from './audit-log.service.js';
 
 export async function findAll(): Promise<Position[]> {
   return prisma.position.findMany({ orderBy: { opened_at: 'desc' } }) as Promise<
@@ -44,6 +45,13 @@ export async function create(
     prisma.position.create({ data }) as Promise<Position>,
   );
   emitPositionUpdate(result.id, result.market_id, result);
+  void createAuditLog(
+    'position_opened',
+    'position',
+    result.id,
+    { side: result.side, size: Number(result.size), avg_entry_price: Number(result.avg_entry_price), outcome_token: result.outcome_token },
+    'execution-engine',
+  ).catch(() => {});
   return result;
 }
 
@@ -111,7 +119,15 @@ export async function setExitStrategy(
 }
 
 export async function remove(id: string): Promise<Position> {
-  return withPrismaError('Position', () =>
+  const result = await withPrismaError('Position', () =>
     prisma.position.delete({ where: { id } }) as Promise<Position>,
   );
+  void createAuditLog(
+    'position_closed',
+    'position',
+    id,
+    {},
+    'exit-monitor',
+  ).catch(() => {});
+  return result;
 }

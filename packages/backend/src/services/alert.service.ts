@@ -7,6 +7,7 @@ import {
 import prisma from '../config/database.js';
 import { withPrismaError, NotFoundError } from './errors.js';
 import { emitAlertNew } from '../websocket/emit.js';
+import { create as createAuditLog } from './audit-log.service.js';
 import {
   buildPaginatedResult,
   getPaginationArgs,
@@ -65,6 +66,13 @@ export async function create(
     prisma.alert.create({ data }) as Promise<Alert>,
   );
   emitAlertNew(result.id.toString(), result.alert_type, result.severity, result);
+  void createAuditLog(
+    'alert_created',
+    'alert',
+    result.id.toString(),
+    { alert_type: result.alert_type, severity: result.severity, title: result.title, message: result.message },
+    'system',
+  ).catch(() => {});
   return result;
 }
 

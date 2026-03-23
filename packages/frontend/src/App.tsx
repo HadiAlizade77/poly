@@ -1,17 +1,15 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { lazy, Suspense } from 'react'
 import { AppLayout } from '@/components/layout/AppLayout'
 
 const Dashboard = lazy(() => import('@/pages/Dashboard'))
 const Markets = lazy(() => import('@/pages/Markets'))
-const Scorers = lazy(() => import('@/pages/Scorers'))
-const Decisions = lazy(() => import('@/pages/Decisions'))
-const Orders = lazy(() => import('@/pages/Orders'))
-const Positions = lazy(() => import('@/pages/Positions'))
+const Trading = lazy(() => import('@/pages/Trading'))
+const Intelligence = lazy(() => import('@/pages/Intelligence'))
 const Risk = lazy(() => import('@/pages/Risk'))
-const Analytics = lazy(() => import('@/pages/Analytics'))
+const ActivityLog = lazy(() => import('@/pages/ActivityLog'))
 const Settings = lazy(() => import('@/pages/Settings'))
-const Health = lazy(() => import('@/pages/Health'))
+const BtcBot = lazy(() => import('@/pages/BtcBot'))
 
 function PageFallback() {
   return (
@@ -42,34 +40,26 @@ export default function App() {
           }
         />
         <Route
-          path="scorers"
+          path="trading"
           element={
             <Suspense fallback={<PageFallback />}>
-              <Scorers />
+              <Trading />
             </Suspense>
           }
         />
         <Route
-          path="decisions"
+          path="btc-bot"
           element={
             <Suspense fallback={<PageFallback />}>
-              <Decisions />
+              <BtcBot />
             </Suspense>
           }
         />
         <Route
-          path="orders"
+          path="intelligence"
           element={
             <Suspense fallback={<PageFallback />}>
-              <Orders />
-            </Suspense>
-          }
-        />
-        <Route
-          path="positions"
-          element={
-            <Suspense fallback={<PageFallback />}>
-              <Positions />
+              <Intelligence />
             </Suspense>
           }
         />
@@ -82,10 +72,10 @@ export default function App() {
           }
         />
         <Route
-          path="analytics"
+          path="activity"
           element={
             <Suspense fallback={<PageFallback />}>
-              <Analytics />
+              <ActivityLog />
             </Suspense>
           }
         />
@@ -97,14 +87,14 @@ export default function App() {
             </Suspense>
           }
         />
-        <Route
-          path="health"
-          element={
-            <Suspense fallback={<PageFallback />}>
-              <Health />
-            </Suspense>
-          }
-        />
+
+        {/* Redirects for old routes */}
+        <Route path="orders" element={<Navigate to="/trading?tab=orders" replace />} />
+        <Route path="positions" element={<Navigate to="/trading?tab=positions" replace />} />
+        <Route path="decisions" element={<Navigate to="/intelligence?tab=decisions" replace />} />
+        <Route path="scorers" element={<Navigate to="/intelligence?tab=scorers" replace />} />
+        <Route path="analytics" element={<Navigate to="/intelligence?tab=analytics" replace />} />
+        <Route path="health" element={<Navigate to="/settings?tab=health" replace />} />
       </Route>
     </Routes>
   )

@@ -24,6 +24,7 @@ import prisma from '../../config/database.js';
 import * as riskEventService from '../risk-event.service.js';
 import * as systemConfigService from '../system-config.service.js';
 import { isActive as isKillSwitchActive } from './kill-switch.js';
+import { getState as getTradingState } from '../trading-state.service.js';
 import type { DecisionOutput } from '../ai/decision-maker.js';
 import type { ScoredDimensions } from '../decision-engine/scorer.interface.js';
 
@@ -99,13 +100,23 @@ export function recordMarketTrade(marketId: string, category: string): void {
 type Limits = typeof DEFAULTS;
 
 async function loadLimits(): Promise<Limits> {
+  let base: Limits;
   try {
     const val = await systemConfigService.getValue<Partial<Limits>>('RISK_LIMITS');
-    if (val && typeof val === 'object') {
-      return { ...DEFAULTS, ...val };
-    }
-  } catch { /* use defaults */ }
-  return { ...DEFAULTS };
+    base = (val && typeof val === 'object') ? { ...DEFAULTS, ...val } : { ...DEFAULTS };
+  } catch {
+    base = { ...DEFAULTS };
+  }
+
+  try {
+    const appetite = (await systemConfigService.getValue<number>('RISK_APPETITE')) ?? 5;
+    const appetiteScale = appetite / 5;
+    base.minEdge          = Math.min(0.10, Math.max(0.01, 0.02 / appetiteScale));
+    base.minLiquidityScore = Math.min(60, Math.max(20, Math.round(40 * (1 / appetiteScale))));
+    base.maxExposurePct   = Math.min(0.95, Math.max(0.40, 0.80 * appetiteScale));
+  } catch { /* use unscaled base */ }
+
+  return base;
 }
 
 // ─── Governor ────────────────────────────────────────────────────────────────
@@ -116,6 +127,19 @@ export class RiskGovernor {
     const limits   = await loadLimits();
     const vetoes:  string[] = [];
     const warnings: string[] = [];
+
+    // ── 0. Trading state ──────────────────────────────────────────────────────
+    const tradingState = await getTradingState();
+    if (tradingState === 'stopped') {
+      return this.veto('TRADING_STOPPED', ctx, 'Trading is stopped');
+    }
+    if (tradingState === 'paused_all') {
+      return this.veto('TRADING_PAUSED', ctx, 'Trading is paused (all activity)');
+    }
+    // paused_sells: allow buys, block sells
+    if (tradingState === 'paused_sells' && ctx.decision.direction === 'sell') {
+      return this.veto('SELLS_PAUSED', ctx, 'Sells are paused');
+    }
 
     // ── 1. Kill switch ────────────────────────────────────────────────────────
     if (await isKillSwitchActive()) {

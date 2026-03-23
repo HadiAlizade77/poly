@@ -67,10 +67,10 @@ module.exports = {
       env_production:  { NODE_ENV: 'production' },
     },
 
-    // ── Risk Governor ──────────────────────────────────────────────────────
+    // ── Execution Manager ─────────────────────────────────────────────────
     {
-      name: 'risk-governor',
-      script: './dist/processes/risk-governor.js',
+      name: 'execution-manager',
+      script: './dist/processes/execution-manager.js',
       instances: 1,
       autorestart: true,
       watch: false,
@@ -79,16 +79,22 @@ module.exports = {
       env_production:  { NODE_ENV: 'production' },
     },
 
-    // ── Order Executor ─────────────────────────────────────────────────────
+    // ── AI Reviewer (pending review monitor) ──────────────────────────────
     {
-      name: 'order-executor',
-      script: './dist/processes/order-executor.js',
+      name: 'ai-reviewer',
+      script: './dist/processes/ai-reviewer.js',
       instances: 1,
       autorestart: true,
       watch: false,
-      max_memory_restart: '256M',
-      env_development: { NODE_ENV: 'development' },
-      env_production:  { NODE_ENV: 'production' },
+      max_memory_restart: '128M',
+      env_development: {
+        NODE_ENV: 'development',
+        AI_REVIEWER_INTERVAL_MS: '60000',
+      },
+      env_production: {
+        NODE_ENV: 'production',
+        AI_REVIEWER_INTERVAL_MS: '60000',
+      },
     },
 
     // ── Scheduler (daily snapshots, pruning) ───────────────────────────────
@@ -99,6 +105,18 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: '128M',
+      env_development: { NODE_ENV: 'development' },
+      env_production:  { NODE_ENV: 'production' },
+    },
+
+    // ── BTC 5-Min Bot ──────────────────────────────────────────────────────
+    {
+      name: 'btc-5min-bot',
+      script: './dist/processes/btc-5min-bot.js',
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '256M',
       env_development: { NODE_ENV: 'development' },
       env_production:  { NODE_ENV: 'production' },
     },

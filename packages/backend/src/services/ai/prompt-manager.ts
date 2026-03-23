@@ -74,6 +74,38 @@ EVENTS-SPECIFIC GUIDANCE:
 - Time pressure matters — markets can resolve suddenly.
 `.trim();
 
+// ─── Risk appetite guidance ──────────────────────────────────────────────────
+
+function getRiskAppetiteLabel(appetite: number): string {
+  if (appetite <= 2) return 'Ultra Conservative';
+  if (appetite <= 4) return 'Conservative';
+  if (appetite === 5) return 'Balanced';
+  if (appetite <= 7) return 'Aggressive';
+  if (appetite <= 9) return 'Very Aggressive';
+  return 'Maximum';
+}
+
+function getRiskAppetiteGuidance(appetite: number): string {
+  const label = getRiskAppetiteLabel(appetite);
+  let guidance: string;
+
+  if (appetite <= 2) {
+    guidance = 'Only trade with >8% edge, high confidence (>0.8), and excellent liquidity. Prefer \'hold\' strongly.';
+  } else if (appetite <= 4) {
+    guidance = 'Trade with >5% edge, confidence >0.7. Be selective.';
+  } else if (appetite === 5) {
+    guidance = 'Trade with >3% edge, confidence >0.6. Standard approach.';
+  } else if (appetite <= 7) {
+    guidance = 'Trade with >2% edge, confidence >0.5. Take more opportunities.';
+  } else if (appetite <= 9) {
+    guidance = 'Trade with >1% edge, confidence >0.4. Actively seek trades. Larger size hints.';
+  } else {
+    guidance = 'Trade on any positive edge. Maximum conviction and sizing.';
+  }
+
+  return `RISK APPETITE: ${appetite}/10 (${label})\n- ${guidance}`;
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 type Category = 'crypto' | 'politics' | 'sports' | 'events' | 'entertainment' | 'other' | string;
@@ -86,11 +118,39 @@ const ADDENDA: Partial<Record<string, string>> = {
   entertainment: EVENTS_ADDENDUM,
 };
 
-export function getSystemPrompt(category: Category): string {
+export function getSystemPrompt(category: Category, riskAppetite = 5): string {
   const addendum = ADDENDA[category] ?? '';
-  return addendum ? `${BASE_RULES}\n\n${addendum}` : BASE_RULES;
+  const appetiteSection = getRiskAppetiteGuidance(riskAppetite);
+  const parts = [BASE_RULES, appetiteSection];
+  if (addendum) parts.push(addendum);
+  return parts.join('\n\n');
 }
 
 export function getUserPrompt(dashboardText: string): string {
   return `Here is the market context dashboard. Analyse it and respond with your JSON decision:\n\n${dashboardText}`;
+}
+
+// ─── Screening prompt (Stage 1 — cheap batch call) ───────────────────────────
+
+const SCREENING_SYSTEM = `
+You screen prediction markets for tradeable edge. Given a table, pick rows worth deeper analysis.
+
+RULES:
+- Most markets will NOT have edge. Be very selective.
+- Look for: mispriced probabilities, high volume with prices that seem wrong.
+- Prices near 0 or 1 with tight spreads are usually correct — skip.
+- Wide spreads (>10%) = no liquidity — skip unless price is clearly wrong.
+- Maximum 5 selections per batch.
+
+RESPOND WITH ONLY A JSON ARRAY. No text, no explanation, no markdown.
+Examples: [3, 7, 15] or []
+`.trim();
+
+export function getScreeningSystemPrompt(riskAppetite = 5): string {
+  const appetiteSection = getRiskAppetiteGuidance(riskAppetite);
+  return `${SCREENING_SYSTEM}\n\n${appetiteSection}`;
+}
+
+export function getScreeningUserPrompt(category: string, marketTable: string): string {
+  return `Category: ${category}\n\n${marketTable}\n\nRespond with ONLY a JSON array of row numbers to investigate deeper (e.g. [2, 5, 11]), or [] if none.`;
 }

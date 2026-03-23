@@ -1,6 +1,7 @@
 import { type Trade, type OrderSide, type Prisma } from '@prisma/client';
 import prisma from '../config/database.js';
 import { withPrismaError, NotFoundError } from './errors.js';
+import { create as createAuditLog } from './audit-log.service.js';
 import {
   buildPaginatedResult,
   getPaginationArgs,
@@ -70,7 +71,15 @@ export async function getRecentTrades(limit = 50): Promise<Trade[]> {
 }
 
 export async function create(data: Prisma.TradeUncheckedCreateInput): Promise<Trade> {
-  return withPrismaError('Trade', () =>
+  const result = await withPrismaError('Trade', () =>
     prisma.trade.create({ data }) as Promise<Trade>,
   );
+  void createAuditLog(
+    'trade_executed',
+    'trade',
+    result.id,
+    { side: result.side, outcome_token: result.outcome_token, size: Number(result.size), entry_price: Number(result.entry_price), fees: Number(result.fees) },
+    'execution-engine',
+  ).catch(() => {});
+  return result;
 }

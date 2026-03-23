@@ -16,6 +16,7 @@ import { computeSize, type SizingConfig, type SizingResult } from './sizing.js';
 import { orderManager, type PlaceOrderInput } from './order-manager.js';
 import { positionManager } from './position-manager.js';
 import type { DecisionOutput } from '../ai/decision-maker.js';
+import * as systemConfigService from '../system-config.service.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,14 @@ export class ExecutionEngine {
     const marketPrice = prices ? (prices[outcomeToken] ?? 0.5) : 0.5;
 
     // ── 2. Compute position size ───────────────────────────────────────────
+    const appetite = (await systemConfigService.getValue<number>('RISK_APPETITE')) ?? 5;
+    const appetiteScale = appetite / 5; // 1.0 at default, 2.0 at max, 0.2 at min
+    const appetiteSizingConfig: Partial<SizingConfig> = {
+      kelly_fraction:  Math.min(0.50, Math.max(0.05, 0.25 * appetiteScale)),
+      max_position_pct: Math.min(0.10, Math.max(0.01, 0.05 * appetiteScale)),
+      min_edge:         Math.min(0.10, Math.max(0.01, 0.02 / appetiteScale)),
+    };
+
     const sizing = computeSize(
       {
         confidence: decision.confidence,
@@ -68,7 +77,7 @@ export class ExecutionEngine {
         marketPrice,
         bankroll,
       },
-      input.sizingConfig,
+      { ...appetiteSizingConfig, ...input.sizingConfig },
     );
 
     if (!sizing) {

@@ -6,6 +6,7 @@ import type { ExitStrategy, CloseReason } from '@prisma/client';
 import prisma from '../config/database.js';
 import type { PaginatedResult } from '../services/utils/pagination.js';
 import type { Position } from '@prisma/client';
+import { create as createAuditLog } from '../services/audit-log.service.js';
 
 export async function listPositions(
   req: Request,
@@ -93,6 +94,14 @@ export async function closePosition(
         where: { id: p.id as string },
       });
     });
+
+    void createAuditLog(
+      'position_closed_manual',
+      'position',
+      req.params.id,
+      { close_reason, side: (position as Record<string, unknown>).side, outcome_token: (position as Record<string, unknown>).outcome_token },
+      'user',
+    ).catch(() => {});
 
     res.status(204).end();
   } catch (err) {

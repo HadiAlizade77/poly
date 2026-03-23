@@ -9,6 +9,7 @@ import logger from '../../config/logger.js';
 import prisma from '../../config/database.js';
 import * as positionService from '../position.service.js';
 import * as bankrollService from '../bankroll.service.js';
+import { create as createAuditLog } from '../audit-log.service.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -144,6 +145,14 @@ export class PositionManager {
 
     // ── Remove live position ───────────────────────────────────────────────
     await positionService.remove(position.id);
+
+    void createAuditLog(
+      'position_closed',
+      'position',
+      input.positionId,
+      { side: position.side, outcome_token: position.outcome_token, close_reason: input.closeReason, entry_price: entryPrice, exit_price: exitPrice, realized_pnl: realizedPnl, size },
+      input.closeReason === 'manual' ? 'user' : 'exit-monitor',
+    ).catch(() => {});
 
     logger.info('PositionManager: position closed', {
       positionId: position.id,

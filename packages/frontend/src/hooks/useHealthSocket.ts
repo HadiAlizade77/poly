@@ -75,14 +75,17 @@ export function useHealthSocket() {
   // Seed from REST on first load so the page isn't blank
   useEffect(() => {
     if (restHealth && !health) {
+      const full = restHealth as unknown as Partial<SystemHealthPayload>
       setHealth({
-        status: restHealth.status as SystemHealthPayload['status'],
-        uptime: restHealth.uptime ?? 0,
-        timestamp: restHealth.timestamp ?? new Date().toISOString(),
-        db: 'ok',
-        redis: 'ok',
-        connections: 0,
-        environment: restHealth.environment,
+        status: (full.status ?? 'ok') as SystemHealthPayload['status'],
+        uptime: full.uptime ?? 0,
+        timestamp: full.timestamp ?? new Date().toISOString(),
+        db: full.db ?? 'ok',
+        redis: full.redis ?? 'ok',
+        connections: full.connections ?? 0,
+        memory: full.memory,
+        services: full.services,
+        environment: full.environment ?? restHealth.environment,
       })
     }
   }, [restHealth, health])

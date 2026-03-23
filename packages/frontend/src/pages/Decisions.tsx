@@ -202,7 +202,9 @@ const columns: ColumnDef<AIDecision, unknown>[] = [
     cell: ({ getValue }) => {
       const v = getValue() as RegimeAssessment | null
       if (!v) return <span className="text-muted-foreground">—</span>
-      const { variant, label } = REGIME_STYLE[v]
+      const style = REGIME_STYLE[v]
+      if (!style) return <Badge variant="default">{v}</Badge>
+      const { variant, label } = style
       return <Badge variant={variant}>{label}</Badge>
     },
   },

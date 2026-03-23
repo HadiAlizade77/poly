@@ -6,6 +6,7 @@ import {
 import prisma from '../config/database.js';
 import { withPrismaError, NotFoundError } from './errors.js';
 import { emitDecisionNew } from '../websocket/emit.js';
+import { create as createAuditLog } from './audit-log.service.js';
 import {
   buildPaginatedResult,
   getPaginationArgs,
@@ -93,6 +94,13 @@ export async function create(
     prisma.aiDecision.create({ data }) as Promise<AiDecision>,
   );
   emitDecisionNew(result.id.toString(), result.market_id, result.action, result);
+  void createAuditLog(
+    result.action === 'trade' ? 'ai_decision_trade' : 'ai_decision_hold',
+    'ai_decision',
+    result.id.toString(),
+    { category: result.category, action: result.action, confidence: Number(result.confidence), reasoning: result.reasoning?.slice(0, 200) },
+    'decision-engine',
+  ).catch(() => {});
   return result;
 }
 
@@ -104,6 +112,13 @@ export async function markExecuted(id: bigint, orderId: string): Promise<AiDecis
     }) as Promise<AiDecision>,
   );
   emitDecisionNew(result.id.toString(), result.market_id, result.action, result);
+  void createAuditLog(
+    'ai_decision_executed',
+    'ai_decision',
+    result.id.toString(),
+    { category: result.category, orderId },
+    'execution-engine',
+  ).catch(() => {});
   return result;
 }
 
@@ -115,6 +130,13 @@ export async function markVetoed(id: bigint, vetoReason: string): Promise<AiDeci
     }) as Promise<AiDecision>,
   );
   emitDecisionNew(result.id.toString(), result.market_id, result.action, result);
+  void createAuditLog(
+    'ai_decision_vetoed',
+    'ai_decision',
+    result.id.toString(),
+    { category: result.category, vetoReason },
+    'risk-governor',
+  ).catch(() => {});
   return result;
 }
 

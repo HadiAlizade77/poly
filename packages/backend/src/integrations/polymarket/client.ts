@@ -76,12 +76,13 @@ export class PolymarketClient {
     }
 
     const res = await withRetry(() =>
-      this.gamma.get<PolymarketMarket[]>('/markets', {
+      this.gamma.get<GammaMarketRaw[]>('/markets', {
         params: { active: true, archived: false, closed: false, offset, limit },
       }),
     );
 
-    return Array.isArray(res.data) ? res.data : [];
+    const raw = Array.isArray(res.data) ? res.data : [];
+    return raw.map(normalizeGammaMarket).filter((m): m is PolymarketMarket => m !== null);
   }
 
   /**
@@ -116,9 +117,9 @@ export class PolymarketClient {
 
     try {
       const res = await withRetry(() =>
-        this.gamma.get<PolymarketMarket>(`/markets/${conditionId}`),
+        this.gamma.get<GammaMarketRaw>(`/markets/${conditionId}`),
       );
-      return res.data;
+      return normalizeGammaMarket(res.data);
     } catch (err) {
       logger.warn('PolymarketClient: getMarket failed', {
         conditionId,
@@ -174,6 +175,75 @@ export class PolymarketClient {
       return null;
     }
   }
+}
+
+// ─── Gamma API normalizer ─────────────────────────────────────────────────────
+//
+// The Gamma API (/markets) returns a different shape from the CLOB API and from
+// what PolymarketMarket expects. This function bridges the gap.
+
+interface GammaMarketRaw {
+  id?: string;
+  conditionId?: string;
+  questionID?: string;
+  question?: string;
+  description?: string;
+  slug?: string;
+  endDate?: string;
+  endDateIso?: string;
+  outcomes?: string;        // JSON array string: '["Yes","No"]'
+  outcomePrices?: string;   // JSON array string: '["0.6","0.4"]'
+  clobTokenIds?: string;    // JSON array string: '["tokenId1","tokenId2"]'
+  volume?: string | number;
+  volume24hr?: string | number;
+  liquidity?: string | number;
+  active?: boolean;
+  closed?: boolean;
+  archived?: boolean;
+  negRisk?: boolean;
+  neg_risk?: boolean;
+  tags?: unknown[];
+  [key: string]: unknown;
+}
+
+function normalizeGammaMarket(raw: GammaMarketRaw): PolymarketMarket | null {
+  const conditionId = raw.conditionId ?? raw.condition_id as string | undefined;
+  if (!conditionId || !raw.question) return null;
+
+  // Parse JSON-string arrays from the Gamma API
+  let outcomes: string[] = [];
+  let prices: number[] = [];
+  let tokenIds: string[] = [];
+
+  try { outcomes = JSON.parse(raw.outcomes ?? '[]') as string[]; } catch { /* skip */ }
+  try {
+    const p = JSON.parse(raw.outcomePrices ?? '[]') as (string | number)[];
+    prices = p.map(Number);
+  } catch { /* skip */ }
+  try { tokenIds = JSON.parse(raw.clobTokenIds ?? '[]') as string[]; } catch { /* skip */ }
+
+  const tokens = outcomes.map((outcome, i) => ({
+    token_id: tokenIds[i] ?? '',
+    outcome,
+    price: prices[i] ?? 0,
+  }));
+
+  return {
+    condition_id: conditionId,
+    question_id:  raw.questionID ?? raw.question_id as string | undefined,
+    question:     raw.question,
+    description:  raw.description,
+    market_slug:  raw.slug ?? raw.market_slug as string | undefined,
+    end_date_iso: raw.endDate ?? raw.endDateIso ?? raw.end_date_iso as string | undefined,
+    tokens,
+    tags:         raw.tags as PolymarketMarket['tags'],
+    active:       raw.active ?? true,
+    closed:       raw.closed ?? false,
+    archived:     raw.archived ?? false,
+    neg_risk:     raw.negRisk ?? raw.neg_risk ?? false,
+    volume_24hr:  raw.volume24hr !== undefined ? String(raw.volume24hr) : undefined,
+    liquidity:    raw.liquidity  !== undefined ? String(raw.liquidity)  : undefined,
+  };
 }
 
 // ─── Demo helpers ──────────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ import logger from '../../config/logger.js';
 import prisma from '../../config/database.js';
 import * as positionService from '../position.service.js';
 import { positionManager } from './position-manager.js';
+import { getState as getTradingState } from '../trading-state.service.js';
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -51,6 +52,13 @@ export class ExitMonitor {
 
   private async runCheck(): Promise<void> {
     try {
+      // Check trading state — paused_sells and paused_all block exits
+      const tradingState = await getTradingState();
+      if (tradingState === 'stopped' || tradingState === 'paused_all' || tradingState === 'paused_sells') {
+        logger.debug('ExitMonitor: skipping check — trading state is ' + tradingState);
+        return;
+      }
+
       const positions = await positionService.findOpen();
       if (positions.length === 0) return;
 

@@ -12,6 +12,7 @@ export const WS_CHANNELS = {
   ALERT_NEW: 'alert:new',
   BANKROLL_UPDATE: 'bankroll:update',
   SYSTEM_HEALTH: 'system:health',
+  TRADING_STATE: 'trading:state',
 } as const;
 
 export type WsChannel = (typeof WS_CHANNELS)[keyof typeof WS_CHANNELS];
@@ -27,4 +28,5 @@ export interface WsEventMap {
   'alert:new': { alertId: string; alertType: string; severity: string; data: unknown };
   'bankroll:update': { data: unknown };
   'system:health': { status: string; uptime: number; timestamp: string };
+  'trading:state': { state: string; timestamp: string };
 }

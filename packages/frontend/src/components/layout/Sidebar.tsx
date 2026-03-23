@@ -6,14 +6,12 @@ import {
   Brain,
   Zap,
   ShoppingCart,
-  Wallet,
   Shield,
-  BarChart3,
+  ScrollText,
   Settings,
   ChevronLeft,
   ChevronRight,
-  Activity,
-  HeartPulse,
+  Bitcoin,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/stores/app.store'
@@ -28,18 +26,24 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/markets', icon: TrendingUp, label: 'Markets' },
-  { to: '/scorers', icon: Activity, label: 'Context Scorers' },
-  { to: '/decisions', icon: Brain, label: 'AI Decisions' },
-  { to: '/orders', icon: ShoppingCart, label: 'Orders' },
-  { to: '/positions', icon: Wallet, label: 'Positions' },
+  { to: '/trading', icon: ShoppingCart, label: 'Trading' },
+  { to: '/btc-bot', icon: Bitcoin, label: 'BTC Bot' },
+  { to: '/intelligence', icon: Brain, label: 'Intelligence' },
   { to: '/risk', icon: Shield, label: 'Risk' },
-  { to: '/analytics', icon: BarChart3, label: 'Analytics' },
+  { to: '/activity', icon: ScrollText, label: 'Activity Log' },
   { to: '/settings', icon: Settings, label: 'Settings' },
-  { to: '/health', icon: HeartPulse, label: 'System Health' },
 ]
 
+const TRADING_STATE_DOT: Record<string, string> = {
+  running: 'bg-profit',
+  stopped: 'bg-loss',
+  paused_all: 'bg-warning animate-pulse',
+  paused_sells: 'bg-warning animate-pulse',
+}
+
 export function Sidebar() {
-  const { sidebarOpen, toggleSidebar } = useAppStore()
+  const { sidebarOpen, toggleSidebar, tradingState } = useAppStore()
+  const stateDot = TRADING_STATE_DOT[tradingState] ?? 'bg-slate-600'
 
   return (
     <aside
@@ -51,13 +55,29 @@ export function Sidebar() {
       {/* Logo */}
       <div className="flex items-center h-14 px-3 border-b border-border">
         <div className="flex items-center gap-2 min-w-0">
-          <div className="w-7 h-7 rounded bg-info flex items-center justify-center shrink-0">
+          <div className="relative w-7 h-7 rounded bg-info flex items-center justify-center shrink-0">
             <Zap className="w-4 h-4 text-white" />
+            {!sidebarOpen && (
+              <span
+                className={cn(
+                  'absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border border-surface',
+                  stateDot
+                )}
+              />
+            )}
           </div>
           {sidebarOpen && (
-            <span className="font-semibold text-sm text-slate-100 truncate">
-              Polymarket AI
-            </span>
+            <>
+              <span className="font-semibold text-sm text-slate-100 truncate">
+                Polymarket AI
+              </span>
+              <span
+                className={cn(
+                  'w-2 h-2 rounded-full shrink-0',
+                  stateDot
+                )}
+              />
+            </>
           )}
         </div>
       </div>

@@ -25,6 +25,7 @@ import { rateLimiter } from './middleware/rate-limit.js';
 import routes from './routes/index.js';
 import { initWebSocket } from './websocket/server.js';
 import { startHealthEmitter, stopHealthEmitter } from './websocket/health.js';
+import { startWsBridge } from './websocket/emit.js';
 
 const app = express();
 
@@ -57,6 +58,7 @@ app.use(errorHandler);
 const httpServer = createServer(app);
 initWebSocket(httpServer);
 startHealthEmitter();
+void startWsBridge();
 
 // Start listening
 httpServer.listen(config.PORT, () => {

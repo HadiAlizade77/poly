@@ -21,6 +21,7 @@ import { classifyMarket } from './classifier.js';
 import * as marketService from '../market.service.js';
 import * as marketSnapshotService from '../market-snapshot.service.js';
 import * as systemConfigService from '../system-config.service.js';
+import { canScan as tradingCanScan } from '../trading-state.service.js';
 import { emitMarketUpdate } from '../../websocket/emit.js';
 
 const DEFAULT_CONFIG: ScannerConfig = {
@@ -165,6 +166,12 @@ export class MarketScanner {
   // ─── Scan loop ─────────────────────────────────────────────────────────────
 
   private async scan(): Promise<void> {
+    // Check trading state — scanner runs in all states except stopped
+    if (!(await tradingCanScan())) {
+      logger.debug('MarketScanner: skipping scan — trading is stopped');
+      return;
+    }
+
     const startMs = Date.now();
     logger.info('MarketScanner: scan started');
 

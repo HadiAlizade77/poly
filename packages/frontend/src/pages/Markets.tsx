@@ -1,14 +1,16 @@
 import React from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
-import { Search, ExternalLink, X } from 'lucide-react'
+import { Search, ExternalLink, X, Brain, CheckCircle, XCircle } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import { useNavigate } from 'react-router-dom'
 import { useMarkets } from '@/hooks/useMarkets'
+import { useDecisions } from '@/hooks/useDecisions'
 import { DataTable } from '@/components/ui/DataTable'
 import { MarketStatusBadge } from '@/components/ui/StatusBadge'
 import { Badge } from '@/components/ui/Badge'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
 import { cn } from '@/lib/utils'
-import type { Market, MarketCategory, MarketStatus } from '@polymarket/shared'
+import type { Market, MarketCategory, MarketStatus, AIDecision } from '@polymarket/shared'
 
 const CATEGORIES: { value: MarketCategory | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -29,9 +31,18 @@ const STATUS_FILTERS: { value: MarketStatus | 'all'; label: string }[] = [
   { value: 'excluded', label: 'Excluded' },
 ]
 
-function MarketDrawer({ market, onClose }: { market: Market; onClose: () => void }) {
-  const yesPrice = market.current_prices?.['YES'] ?? market.current_prices?.['yes']
-  const noPrice = market.current_prices?.['NO'] ?? market.current_prices?.['no']
+function MarketDrawer({ market, onClose, latestDecision }: { market: Market; onClose: () => void; latestDecision?: AIDecision }) {
+  const navigate = useNavigate()
+
+  // Normalize outcomes to handle both scanner format (tokenId/outcome) and seed format (token_id/name)
+  const normalizedOutcomes = (market.outcomes ?? []).map((o: any) => ({
+    name: o.name ?? o.outcome ?? 'Unknown',
+    token_id: o.token_id ?? o.tokenId ?? '',
+  }))
+
+  const outcomeNames = normalizedOutcomes.map((o) => o.name)
+  const yesPrice = market.current_prices?.[outcomeNames.find((n) => n.toLowerCase() === 'yes') ?? 'Yes']
+  const noPrice = market.current_prices?.[outcomeNames.find((n) => n.toLowerCase() === 'no') ?? 'No']
 
   return (
     <div className="fixed inset-0 z-40 flex">
@@ -55,9 +66,69 @@ function MarketDrawer({ market, onClose }: { market: Market; onClose: () => void
             <div className="flex items-center gap-2 mt-2 flex-wrap">
               <MarketStatusBadge status={market.status} />
               <Badge variant="outline">{market.category}</Badge>
-              {market.is_tradeable && <Badge variant="success">Tradeable</Badge>}
             </div>
           </div>
+
+          {/* Tradeable indicator */}
+          {market.is_tradeable ? (
+            <div className="flex items-center gap-2 bg-profit/10 border border-profit/20 rounded-md px-3 py-2 text-sm text-profit">
+              <CheckCircle className="w-4 h-4" />
+              Eligible for AI Trading
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 bg-surface-2 border border-border rounded-md px-3 py-2 text-sm text-muted-foreground">
+              <XCircle className="w-4 h-4" />
+              Not eligible for trading
+              {(market as any).exclusion_reason && (
+                <span>— {(market as any).exclusion_reason}</span>
+              )}
+            </div>
+          )}
+
+          {/* AI Decision Context */}
+          {latestDecision == null ? (
+            <div className="bg-surface-2 rounded-md px-3 py-2 text-xs text-muted-foreground">
+              <Brain className="w-4 h-4 inline mr-1.5" />
+              No AI decision yet for this market
+            </div>
+          ) : (
+            <div className="bg-surface-2 rounded-lg p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <Brain className="w-4 h-4 text-info" />
+                <span className="text-xs font-medium text-slate-200">Latest AI Decision</span>
+                <Badge variant={latestDecision.action === 'trade' ? 'success' : 'default'}>
+                  {latestDecision.action.toUpperCase()}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <span className="text-muted-foreground">Confidence: </span>
+                  <span className="font-numeric text-slate-300">{Math.round(Number(latestDecision.confidence) * 100)}%</span>
+                </div>
+                {latestDecision.direction && (
+                  <div>
+                    <span className="text-muted-foreground">Direction: </span>
+                    <span className="text-slate-300">{latestDecision.direction}</span>
+                  </div>
+                )}
+                {latestDecision.regime_assessment && (
+                  <div>
+                    <span className="text-muted-foreground">Regime: </span>
+                    <span className="text-slate-300 capitalize">{latestDecision.regime_assessment}</span>
+                  </div>
+                )}
+                {latestDecision.estimated_edge != null && (
+                  <div>
+                    <span className="text-muted-foreground">Edge: </span>
+                    <span className="font-numeric text-slate-300">{(Number(latestDecision.estimated_edge) * 100).toFixed(2)}%</span>
+                  </div>
+                )}
+              </div>
+              {latestDecision.reasoning && (
+                <p className="text-xs text-slate-400 line-clamp-2 mt-1">{latestDecision.reasoning}</p>
+              )}
+            </div>
+          )}
 
           {/* Prices */}
           {market.current_prices && Object.keys(market.current_prices).length > 0 && (
@@ -106,12 +177,12 @@ function MarketDrawer({ market, onClose }: { market: Market; onClose: () => void
           )}
 
           {/* Outcomes */}
-          {market.outcomes.length > 0 && (
+          {normalizedOutcomes.length > 0 && (
             <div>
               <p className="text-xs text-muted-foreground mb-2">Outcomes</p>
               <div className="space-y-1.5">
-                {market.outcomes.map((o) => (
-                  <div key={o.token_id} className="flex items-center justify-between bg-surface-2 rounded px-3 py-2">
+                {normalizedOutcomes.map((o) => (
+                  <div key={o.token_id || o.name} className="flex items-center justify-between bg-surface-2 rounded px-3 py-2">
                     <span className="text-sm text-slate-200">{o.name}</span>
                     {market.current_prices?.[o.name] != null && (
                       <PriceDisplay
@@ -126,115 +197,44 @@ function MarketDrawer({ market, onClose }: { market: Market; onClose: () => void
             </div>
           )}
 
+          {/* Actions */}
+          <div className="space-y-2 pt-2">
+            {(market.slug || market.polymarket_id) && (
+              <a
+                href={
+                  market.slug
+                    ? `https://polymarket.com/market/${market.slug}`
+                    : `https://polymarket.com/event/${market.polymarket_id}`
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-info text-white rounded-md text-sm font-medium hover:bg-info/90 transition-colors"
+              >
+                <ExternalLink className="w-4 h-4" />
+                Trade on Polymarket
+              </a>
+            )}
+            <button
+              onClick={() => { navigate('/intelligence?tab=decisions') }}
+              className="flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-surface-2 text-slate-300 rounded-md text-sm font-medium hover:bg-slate-700 border border-border transition-colors"
+            >
+              <Brain className="w-4 h-4" />
+              View AI Decisions
+            </button>
+          </div>
+
           {/* Meta */}
           <div className="text-xs text-muted-foreground space-y-1 pt-2 border-t border-border">
             {market.end_date && (
               <p>Ends: {new Date(market.end_date).toLocaleDateString()}</p>
             )}
             <p>Updated {formatDistanceToNow(new Date(market.updated_at), { addSuffix: true })}</p>
-            {market.slug && (
-              <a
-                href={`https://polymarket.com/event/${market.slug}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-info hover:underline"
-              >
-                View on Polymarket <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
           </div>
         </div>
       </div>
     </div>
   )
 }
-
-const columns: ColumnDef<Market, unknown>[] = [
-  {
-    id: 'title',
-    accessorKey: 'title',
-    header: 'Market',
-    size: 320,
-    cell: ({ row }) => (
-      <div className="max-w-xs">
-        <p className="truncate text-slate-200 font-medium text-sm">{row.original.title}</p>
-        <p className="text-xs text-muted-foreground">{row.original.category}</p>
-      </div>
-    ),
-  },
-  {
-    id: 'status',
-    accessorKey: 'status',
-    header: 'Status',
-    size: 100,
-    cell: ({ row }) => <MarketStatusBadge status={row.original.status} />,
-  },
-  {
-    id: 'yes_price',
-    header: 'YES',
-    size: 80,
-    cell: ({ row }) => {
-      const p = row.original.current_prices?.['YES'] ?? row.original.current_prices?.['yes']
-      return <PriceDisplay value={p} decimals={3} className="text-profit" emptyText="—" />
-    },
-  },
-  {
-    id: 'no_price',
-    header: 'NO',
-    size: 80,
-    cell: ({ row }) => {
-      const p = row.original.current_prices?.['NO'] ?? row.original.current_prices?.['no']
-      return <PriceDisplay value={p} decimals={3} className="text-loss" emptyText="—" />
-    },
-  },
-  {
-    id: 'volume_24h',
-    accessorKey: 'volume_24h',
-    header: 'Vol 24h',
-    size: 100,
-    cell: ({ getValue }) => {
-      const v = getValue() as number | null
-      return v != null
-        ? <span className="font-numeric text-slate-300">${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
-        : <span className="text-muted-foreground">—</span>
-    },
-  },
-  {
-    id: 'liquidity',
-    accessorKey: 'liquidity',
-    header: 'Liquidity',
-    size: 100,
-    cell: ({ getValue }) => {
-      const v = getValue() as number | null
-      return v != null
-        ? <span className="font-numeric text-slate-300">${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
-        : <span className="text-muted-foreground">—</span>
-    },
-  },
-  {
-    id: 'tradeable',
-    accessorKey: 'is_tradeable',
-    header: 'Tradeable',
-    size: 90,
-    cell: ({ getValue }) =>
-      getValue() ? (
-        <Badge variant="success">Yes</Badge>
-      ) : (
-        <Badge variant="outline">No</Badge>
-      ),
-  },
-  {
-    id: 'updated_at',
-    accessorKey: 'updated_at',
-    header: 'Updated',
-    size: 120,
-    cell: ({ getValue }) => (
-      <span className="text-xs text-muted-foreground">
-        {formatDistanceToNow(new Date(getValue() as Date), { addSuffix: true })}
-      </span>
-    ),
-  },
-]
 
 export default function Markets() {
   const [category, setCategory] = React.useState<MarketCategory | 'all'>('all')
@@ -246,6 +246,134 @@ export default function Markets() {
     category: category === 'all' ? undefined : category,
     status: statusFilter === 'all' ? undefined : statusFilter,
   })
+
+  const { data: decisions } = useDecisions({ limit: 200 })
+
+  const latestDecisionMap = React.useMemo(() => {
+    if (!decisions) return new Map<string, AIDecision>()
+    const map = new Map<string, AIDecision>()
+    for (const d of decisions) {
+      if (d.market_id && !map.has(d.market_id)) {
+        map.set(d.market_id, d)
+      }
+    }
+    return map
+  }, [decisions])
+
+  const columns = React.useMemo<ColumnDef<Market, unknown>[]>(() => [
+    {
+      id: 'title',
+      accessorKey: 'title',
+      header: 'Market',
+      size: 320,
+      cell: ({ row }) => (
+        <div className="max-w-xs">
+          <p className="truncate text-slate-200 font-medium text-sm">{row.original.title}</p>
+          <p className="text-xs text-muted-foreground">{row.original.category}</p>
+        </div>
+      ),
+    },
+    {
+      id: 'status',
+      accessorKey: 'status',
+      header: 'Status',
+      size: 100,
+      cell: ({ row }) => <MarketStatusBadge status={row.original.status} />,
+    },
+    {
+      id: 'yes_price',
+      header: 'YES',
+      size: 80,
+      cell: ({ row }) => {
+        const p = row.original.current_prices?.['YES'] ?? row.original.current_prices?.['yes']
+        return <PriceDisplay value={p} decimals={3} className="text-profit" emptyText="—" />
+      },
+    },
+    {
+      id: 'no_price',
+      header: 'NO',
+      size: 80,
+      cell: ({ row }) => {
+        const p = row.original.current_prices?.['NO'] ?? row.original.current_prices?.['no']
+        return <PriceDisplay value={p} decimals={3} className="text-loss" emptyText="—" />
+      },
+    },
+    {
+      id: 'volume_24h',
+      accessorKey: 'volume_24h',
+      header: 'Vol 24h',
+      size: 100,
+      cell: ({ getValue }) => {
+        const v = getValue() as number | null
+        return v != null
+          ? <span className="font-numeric text-slate-300">${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+          : <span className="text-muted-foreground">—</span>
+      },
+    },
+    {
+      id: 'liquidity',
+      accessorKey: 'liquidity',
+      header: 'Liquidity',
+      size: 100,
+      cell: ({ getValue }) => {
+        const v = getValue() as number | null
+        return v != null
+          ? <span className="font-numeric text-slate-300">${v.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+          : <span className="text-muted-foreground">—</span>
+      },
+    },
+    {
+      id: 'tradeable',
+      accessorKey: 'is_tradeable',
+      header: 'Tradeable',
+      size: 90,
+      cell: ({ getValue }) =>
+        getValue() ? (
+          <Badge variant="success">Yes</Badge>
+        ) : (
+          <Badge variant="outline">No</Badge>
+        ),
+    },
+    {
+      id: 'ai_signal',
+      header: 'AI Signal',
+      size: 100,
+      cell: ({ row }) => {
+        const decision = latestDecisionMap.get(row.original.id)
+        if (!decision) return <span className="text-xs text-muted-foreground">—</span>
+        return (
+          <div className="flex items-center gap-1.5">
+            <span className={cn(
+              'w-1.5 h-1.5 rounded-full',
+              decision.action === 'trade' ? 'bg-profit' : 'bg-muted'
+            )} />
+            <span className={cn(
+              'text-xs font-medium',
+              decision.action === 'trade' ? 'text-profit' : 'text-muted-foreground'
+            )}>
+              {decision.action === 'trade' ? decision.direction ?? 'TRADE' : 'HOLD'}
+            </span>
+            {decision.confidence != null && (
+              <span className="text-xs text-muted-foreground font-numeric">
+                {Math.round(Number(decision.confidence) * 100)}%
+              </span>
+            )}
+          </div>
+        )
+      },
+    },
+    {
+      id: 'updated_at',
+      accessorKey: 'updated_at',
+      header: 'Updated',
+      size: 120,
+      cell: ({ getValue }) => (
+        <span className="text-xs text-muted-foreground">
+          {formatDistanceToNow(new Date(getValue() as Date), { addSuffix: true })}
+        </span>
+      ),
+    },
+  ], [latestDecisionMap])
 
   const filtered = React.useMemo(() => {
     if (!markets) return []
@@ -320,7 +448,11 @@ export default function Markets() {
       />
 
       {selectedMarket && (
-        <MarketDrawer market={selectedMarket} onClose={() => setSelectedMarket(null)} />
+        <MarketDrawer
+          market={selectedMarket}
+          onClose={() => setSelectedMarket(null)}
+          latestDecision={latestDecisionMap.get(selectedMarket.id)}
+        />
       )}
     </div>
   )
