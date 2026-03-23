@@ -29,8 +29,8 @@ function SideBadge({ side }: { side: OrderSide }) {
   return <Badge variant={side === 'buy' ? 'success' : 'danger'}>{side.toUpperCase()}</Badge>
 }
 
-function FillBar({ filled, total }: { filled: number; total: number }) {
-  const pct = total > 0 ? Math.min(100, (filled / total) * 100) : 0
+function FillBar({ filled, total }: { filled: number | string; total: number | string }) {
+  const pct = Number(total) > 0 ? Math.min(100, (Number(filled) / Number(total)) * 100) : 0
   return (
     <div className="flex items-center gap-2 min-w-[80px]">
       <div className="flex-1 h-1.5 bg-surface-2 rounded-full overflow-hidden">
@@ -71,11 +71,11 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
           <div className="grid grid-cols-2 gap-3">
             {[
               { label: 'Price',        value: <PriceDisplay value={order.price} decimals={4} className="text-slate-200" /> },
-              { label: 'Size',         value: <span className="font-numeric text-slate-200">{order.size.toFixed(6)}</span> },
-              { label: 'Filled',       value: <span className="font-numeric text-profit">{order.filled_size.toFixed(6)}</span> },
+              { label: 'Size',         value: <span className="font-numeric text-slate-200">{Number(order.size).toFixed(6)}</span> },
+              { label: 'Filled',       value: <span className="font-numeric text-profit">{Number(order.filled_size).toFixed(6)}</span> },
               { label: 'Avg Fill',     value: <PriceDisplay value={order.avg_fill_price} decimals={4} className="text-slate-200" /> },
-              { label: 'Fees Paid',    value: <span className="font-numeric text-muted-foreground">${order.fees_paid.toFixed(6)}</span> },
-              { label: 'Fill %',       value: <span className="font-numeric">{order.size > 0 ? ((order.filled_size / order.size) * 100).toFixed(1) : '0'}%</span> },
+              { label: 'Fees Paid',    value: <span className="font-numeric text-muted-foreground">${Number(order.fees_paid).toFixed(6)}</span> },
+              { label: 'Fill %',       value: <span className="font-numeric">{Number(order.size) > 0 ? ((Number(order.filled_size) / Number(order.size)) * 100).toFixed(1) : '0'}%</span> },
             ].map(({ label, value }) => (
               <div key={label} className="bg-surface-2 rounded px-3 py-2">
                 <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
@@ -159,7 +159,7 @@ const columns: ColumnDef<Order, unknown>[] = [
   },
   {
     id: 'size', accessorKey: 'size', header: 'Size', size: 75,
-    cell: ({ getValue }) => <span className="font-numeric text-slate-300">{(getValue() as number).toFixed(4)}</span>,
+    cell: ({ getValue }) => <span className="font-numeric text-slate-300">{Number(getValue()).toFixed(4)}</span>,
   },
   {
     id: 'filled', header: 'Filled', size: 110,
@@ -171,7 +171,7 @@ const columns: ColumnDef<Order, unknown>[] = [
   },
   {
     id: 'fees_paid', accessorKey: 'fees_paid', header: 'Fees', size: 65,
-    cell: ({ getValue }) => <span className="font-numeric text-muted-foreground text-xs">${(getValue() as number).toFixed(4)}</span>,
+    cell: ({ getValue }) => <span className="font-numeric text-muted-foreground text-xs">${Number(getValue()).toFixed(4)}</span>,
   },
   {
     id: 'status', accessorKey: 'status', header: 'Status', size: 95,

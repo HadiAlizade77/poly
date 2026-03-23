@@ -93,7 +93,7 @@ const openColumns: ColumnDef<Position, unknown>[] = [
   },
   {
     id: 'size', accessorKey: 'size', header: 'Size', size: 75,
-    cell: ({ getValue }) => <span className="font-numeric text-slate-200">{(getValue() as number).toFixed(4)}</span>,
+    cell: ({ getValue }) => <span className="font-numeric text-slate-200">{Number(getValue()).toFixed(4)}</span>,
   },
   {
     id: 'avg_entry_price', accessorKey: 'avg_entry_price', header: 'Entry', size: 75,
@@ -129,9 +129,9 @@ const openColumns: ColumnDef<Position, unknown>[] = [
 ]
 
 function OpenPositionsTab({ positions, isLoading }: { positions: Position[] | undefined; isLoading: boolean }) {
-  const totalUnrealized = positions?.reduce((s, p) => s + (p.unrealized_pnl ?? 0), 0) ?? 0
-  const totalRealized   = positions?.reduce((s, p) => s + p.realized_pnl, 0) ?? 0
-  const totalFees       = positions?.reduce((s, p) => s + p.total_fees, 0) ?? 0
+  const totalUnrealized = positions?.reduce((s, p) => s + Number(p.unrealized_pnl ?? 0), 0) ?? 0
+  const totalRealized   = positions?.reduce((s, p) => s + Number(p.realized_pnl), 0) ?? 0
+  const totalFees       = positions?.reduce((s, p) => s + Number(p.total_fees), 0) ?? 0
   const longCount       = positions?.filter((p) => p.side === 'long').length ?? 0
   const shortCount      = positions?.filter((p) => p.side === 'short').length ?? 0
 
@@ -140,7 +140,7 @@ function OpenPositionsTab({ positions, isLoading }: { positions: Position[] | un
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Unrealized P&L" loading={isLoading} value={<PnlDisplay value={totalUnrealized} size="lg" showIcon />} />
         <StatCard label="Realized P&L" loading={isLoading} value={<PnlDisplay value={totalRealized} size="lg" showIcon />} />
-        <StatCard label="Total Fees" loading={isLoading} value={<span className="font-numeric text-muted-foreground">${totalFees.toFixed(4)}</span>} />
+        <StatCard label="Total Fees" loading={isLoading} value={<span className="font-numeric text-muted-foreground">${Number(totalFees).toFixed(4)}</span>} />
         <StatCard label="Long / Short" loading={isLoading} value={<span><span className="text-profit font-numeric">{longCount}</span><span className="text-muted-foreground mx-1">/</span><span className="text-loss font-numeric">{shortCount}</span></span>} />
       </div>
 
@@ -170,7 +170,7 @@ const historyColumns: ColumnDef<PositionHistory, unknown>[] = [
   },
   {
     id: 'size', accessorKey: 'size', header: 'Size', size: 75,
-    cell: ({ getValue }) => <span className="font-numeric text-slate-300">{(getValue() as number).toFixed(4)}</span>,
+    cell: ({ getValue }) => <span className="font-numeric text-slate-300">{Number(getValue()).toFixed(4)}</span>,
   },
   {
     id: 'avg_entry_price', accessorKey: 'avg_entry_price', header: 'Entry', size: 75,
@@ -186,7 +186,7 @@ const historyColumns: ColumnDef<PositionHistory, unknown>[] = [
   },
   {
     id: 'total_fees', accessorKey: 'total_fees', header: 'Fees', size: 70,
-    cell: ({ getValue }) => <span className="font-numeric text-muted-foreground text-xs">${(getValue() as number).toFixed(4)}</span>,
+    cell: ({ getValue }) => <span className="font-numeric text-muted-foreground text-xs">${Number(getValue()).toFixed(4)}</span>,
   },
   {
     id: 'close_reason', accessorKey: 'close_reason', header: 'Close Reason', size: 110,
@@ -215,9 +215,9 @@ function HistoryTab() {
     return <EmptyState title="History unavailable" message="Position history endpoint is not available yet." />
   }
 
-  const totalPnl  = history?.reduce((s, p) => s + p.realized_pnl, 0) ?? 0
-  const winCount  = history?.filter((p) => p.realized_pnl > 0).length ?? 0
-  const lossCount = history?.filter((p) => p.realized_pnl < 0).length ?? 0
+  const totalPnl  = history?.reduce((s, p) => s + Number(p.realized_pnl), 0) ?? 0
+  const winCount  = history?.filter((p) => Number(p.realized_pnl) > 0).length ?? 0
+  const lossCount = history?.filter((p) => Number(p.realized_pnl) < 0).length ?? 0
 
   return (
     <div className="space-y-4">

@@ -211,9 +211,9 @@ export default function Risk() {
     })
   }, [events, severityFilter, typeFilter])
 
-  // Compute current exposure metrics from bankroll
-  const currentExposure    = bankroll?.deployed_balance ?? 0
-  const currentDailyLoss   = Math.max(0, -(bankroll?.balance_delta_today ?? 0))
+  // Compute current exposure metrics from bankroll (Prisma Decimal fields come back as strings)
+  const currentExposure    = Number(bankroll?.deployed_balance ?? 0)
+  const currentDailyLoss   = Math.max(0, -(Number(bankroll?.balance_delta_today ?? 0)))
 
   // Recent critical event count
   const criticalCount = events?.filter((e) => e.severity === 'critical' && !e.auto_resolved).length ?? 0
@@ -273,17 +273,17 @@ export default function Risk() {
             <ExposureGauge
               label="Total Exposure"
               current={currentExposure}
-              limit={config.max_total_exposure}
+              limit={Number(config.max_total_exposure)}
             />
             <ExposureGauge
               label="Daily Loss"
               current={currentDailyLoss}
-              limit={config.max_daily_loss}
+              limit={Number(config.max_daily_loss)}
             />
             <ExposureGauge
               label="Max Spread"
               current={0}
-              limit={config.max_spread}
+              limit={Number(config.max_spread)}
               unit="%"
               decimals={1}
             />
@@ -300,13 +300,13 @@ export default function Risk() {
           </div>
           <div className="p-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             {([
-              { label: 'Max Daily Loss',         value: `$${config.max_daily_loss.toLocaleString()}` },
-              { label: 'Max Position Size',      value: `${(config.max_position_size * 100).toFixed(0)}%` },
-              { label: 'Max Total Exposure',     value: `$${config.max_total_exposure.toLocaleString()}` },
-              { label: 'Max Single Trade',       value: `$${config.max_single_trade.toLocaleString()}` },
+              { label: 'Max Daily Loss',         value: `$${Number(config.max_daily_loss).toLocaleString()}` },
+              { label: 'Max Position Size',      value: `${(Number(config.max_position_size) * 100).toFixed(0)}%` },
+              { label: 'Max Total Exposure',     value: `$${Number(config.max_total_exposure).toLocaleString()}` },
+              { label: 'Max Single Trade',       value: `$${Number(config.max_single_trade).toLocaleString()}` },
               { label: 'Consec. Losses',         value: config.max_consecutive_losses },
               { label: 'Cooldown',               value: `${config.cooldown_after_loss_streak_minutes}m` },
-              { label: 'Min Liquidity',          value: `$${config.min_liquidity.toLocaleString()}` },
+              { label: 'Min Liquidity',          value: `$${Number(config.min_liquidity).toLocaleString()}` },
               { label: 'Max Latency',            value: `${config.max_latency_ms}ms` },
             ] as { label: string; value: string | number }[]).map(({ label, value }) => (
               <div key={label} className="bg-surface-2 rounded px-3 py-2">

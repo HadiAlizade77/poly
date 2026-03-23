@@ -22,7 +22,7 @@ const REGIME_STYLE: Record<RegimeAssessment, { variant: 'info' | 'success' | 'da
 }
 
 function ConfidenceBar({ value }: { value: number }) {
-  const pct = Math.round(value * 100)
+  const pct = Math.round(Number(value) * 100)
   const color = pct >= 70 ? 'bg-profit' : pct >= 45 ? 'bg-warning' : 'bg-loss'
   return (
     <div className="flex items-center gap-2 min-w-[80px]">
@@ -109,9 +109,9 @@ function DecisionDrawer({ d, onClose }: { d: AIDecision; onClose: () => void }) 
           {(d.estimated_edge != null || d.estimated_cost != null || d.fair_value != null) && (
             <div className="grid grid-cols-3 gap-3">
               {[
-                { label: 'Est. Edge', value: d.estimated_edge != null ? `${(d.estimated_edge * 100).toFixed(2)}%` : '—' },
-                { label: 'Est. Cost', value: d.estimated_cost != null ? `$${d.estimated_cost.toFixed(2)}` : '—' },
-                { label: 'Fair Value', value: d.fair_value != null ? `${(d.fair_value * 100).toFixed(1)}¢` : '—' },
+                { label: 'Est. Edge', value: d.estimated_edge != null ? `${(Number(d.estimated_edge) * 100).toFixed(2)}%` : '—' },
+                { label: 'Est. Cost', value: d.estimated_cost != null ? `$${Number(d.estimated_cost).toFixed(2)}` : '—' },
+                { label: 'Fair Value', value: d.fair_value != null ? `${(Number(d.fair_value) * 100).toFixed(1)}¢` : '—' },
               ].map(({ label, value }) => (
                 <div key={label} className="bg-surface-2 rounded px-3 py-2">
                   <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
@@ -270,7 +270,7 @@ export default function Decisions() {
         <StatCard
           label="Avg Confidence"
           loading={statsLoading}
-          value={stats?.avg_confidence != null ? `${(stats.avg_confidence * 100).toFixed(1)}%` : '—'}
+          value={stats?.avg_confidence != null ? `${(Number(stats.avg_confidence) * 100).toFixed(1)}%` : '—'}
         />
         <StatCard
           label="Veto Rate"

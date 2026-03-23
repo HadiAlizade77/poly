@@ -100,13 +100,13 @@ export default function Dashboard() {
           value={
             bankroll ? (
               <span className="font-numeric">
-                ${bankroll.total_balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                ${Number(bankroll.total_balance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             ) : '—'
           }
           subValue={bankroll && (
             <span className="text-xs text-muted-foreground">
-              ${bankroll.active_balance.toLocaleString('en-US', { maximumFractionDigits: 2 })} available
+              ${Number(bankroll.active_balance).toLocaleString('en-US', { maximumFractionDigits: 2 })} available
             </span>
           )}
         />
@@ -176,7 +176,7 @@ export default function Dashboard() {
       </div>
 
       {/* System Health */}
-      {health && (
+      {health?.status && (
         <div className="bg-surface rounded-lg border border-border">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
             <Activity className="w-4 h-4 text-profit" />
@@ -189,7 +189,7 @@ export default function Dashboard() {
             </Badge>
           </div>
           <div className="px-4 py-3 flex flex-wrap gap-4">
-            {Object.entries(health.services).map(([name, status]) => (
+            {health.services && Object.entries(health.services).map(([name, status]) => (
               <div key={name} className="flex items-center gap-1.5">
                 <span
                   className={cn(
@@ -220,7 +220,7 @@ export default function Dashboard() {
                   <Badge variant={p.side === 'long' ? 'success' : 'danger'}>{p.side}</Badge>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground text-xs">size: <span className="font-numeric text-slate-300">{p.size.toFixed(4)}</span></span>
+                  <span className="text-muted-foreground text-xs">size: <span className="font-numeric text-slate-300">{Number(p.size).toFixed(4)}</span></span>
                   {p.unrealized_pnl != null && (
                     <PnlDisplay value={p.unrealized_pnl} size="sm" />
                   )}

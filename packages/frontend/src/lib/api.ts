@@ -31,7 +31,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (res.status === 204) return undefined as T
-  return res.json() as Promise<T>
+  const json = await res.json()
+  // Unwrap { success, data } wrapper from backend if present
+  if (json && typeof json === 'object' && 'success' in json && 'data' in json) {
+    return json.data as T
+  }
+  return json as T
 }
 
 export const api = {

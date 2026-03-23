@@ -70,7 +70,7 @@ function PnlHistoryChart() {
     date: format(new Date(h.date), 'MMM d'),
     balance: h.closing_balance,
     pnl: h.trading_pnl,
-    winRate: h.win_rate != null ? +(h.win_rate * 100).toFixed(1) : null,
+    winRate: h.win_rate != null ? +(Number(h.win_rate) * 100).toFixed(1) : null,
   }))
 
   const firstBalance = chartData[0]?.balance ?? 0
@@ -123,7 +123,7 @@ function DailyPnlChart() {
 
   const chartData = history.map((h) => ({
     date: format(new Date(h.date), 'MMM d'),
-    pnl: +h.trading_pnl.toFixed(2),
+    pnl: +Number(h.trading_pnl).toFixed(2),
   }))
 
   return (
@@ -221,8 +221,8 @@ function ConfidenceOutcomeChart() {
   }
 
   const data = tradeDecisions.map((d) => ({
-    confidence: +(d.confidence * 100).toFixed(1),
-    edge: d.estimated_edge != null ? +(d.estimated_edge * 100).toFixed(2) : 0,
+    confidence: +(Number(d.confidence) * 100).toFixed(1),
+    edge: d.estimated_edge != null ? +(Number(d.estimated_edge) * 100).toFixed(2) : 0,
     executed: d.was_executed ? 1 : 0,
   }))
 
@@ -271,7 +271,7 @@ function WinRateChart() {
     .filter((h) => h.win_rate != null)
     .map((h) => ({
       date: format(new Date(h.date), 'MMM d'),
-      winRate: +(h.win_rate! * 100).toFixed(1),
+      winRate: +(Number(h.win_rate!) * 100).toFixed(1),
     }))
 
   if (chartData.length === 0) return null
@@ -325,11 +325,11 @@ function ConfidenceCalibrationChart() {
   type Bucket = { bucket: string; winRate: number; count: number }
   const bucketMap: Record<string, { wins: number; total: number }> = {}
   for (const d of executed) {
-    const pct = Math.floor(d.confidence * 10) * 10
+    const pct = Math.floor(Number(d.confidence) * 10) * 10
     const label = `${pct}–${pct + 10}%`
     if (!bucketMap[label]) bucketMap[label] = { wins: 0, total: 0 }
     bucketMap[label].total++
-    if ((d.estimated_edge ?? 0) > 0) bucketMap[label].wins++
+    if (Number(d.estimated_edge ?? 0) > 0) bucketMap[label].wins++
   }
 
   const data: Bucket[] = Object.entries(bucketMap)
@@ -384,7 +384,7 @@ export default function Analytics() {
   const { data: summary, isLoading: summaryLoading } = useAnalyticsSummary()
   const { data: bankroll, isLoading: bankrollLoading } = useBankroll()
 
-  const winRate  = summary?.win_rate != null ? `${(summary.win_rate * 100).toFixed(1)}%` : '—'
+  const winRate  = summary?.win_rate != null ? `${(Number(summary.win_rate) * 100).toFixed(1)}%` : '—'
   const avgPnl   = summary?.avg_pnl_per_trade != null ? summary.avg_pnl_per_trade : null
 
   return (
@@ -415,7 +415,7 @@ export default function Analytics() {
           loading={bankrollLoading}
           value={
             bankroll
-              ? `$${bankroll.total_balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              ? `$${Number(bankroll.total_balance).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
               : '—'
           }
           subValue={bankroll ? <PnlDisplay value={bankroll.balance_delta_today} size="sm" showIcon /> : undefined}
@@ -471,9 +471,9 @@ export default function Analytics() {
       {/* Fees summary */}
       {summary && (
         <div className="bg-surface rounded-lg border border-border px-4 py-3 flex flex-wrap gap-6 text-xs text-muted-foreground">
-          <span>Total fees paid: <span className="font-numeric text-slate-300">${summary.total_fees.toFixed(4)}</span></span>
+          <span>Total fees paid: <span className="font-numeric text-slate-300">${Number(summary.total_fees).toFixed(4)}</span></span>
           {summary.avg_hold_time_hours != null && (
-            <span>Avg hold time: <span className="font-numeric text-slate-300">{summary.avg_hold_time_hours.toFixed(1)}h</span></span>
+            <span>Avg hold time: <span className="font-numeric text-slate-300">{Number(summary.avg_hold_time_hours).toFixed(1)}h</span></span>
           )}
           <span className="ml-auto">
             <BarChart3 className="w-3.5 h-3.5 inline mr-1" />
