@@ -77,11 +77,9 @@ export function initWebSocket(httpServer: HttpServer): SocketIOServer {
       }
     });
 
-    // Auto-join all channels for authenticated clients
-    if (user !== null) {
-      for (const channel of Object.values(WS_CHANNELS)) {
-        void socket.join(channel);
-      }
+    // Auto-join all channels so every client receives broadcasts
+    for (const channel of Object.values(WS_CHANNELS)) {
+      void socket.join(channel);
     }
 
     socket.on('disconnect', (reason) => {

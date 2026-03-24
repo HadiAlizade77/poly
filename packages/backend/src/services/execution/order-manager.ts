@@ -40,8 +40,8 @@ function mockFillDelay(): number {
 }
 
 function mockFillPrice(requestedPrice: number): number {
-  // Simulate slippage: ±0.5%
-  const slip = (Math.random() - 0.5) * 0.01;
+  // Simulate slippage: ±0.1% (binary markets with tight spreads)
+  const slip = (Math.random() - 0.5) * 0.002;
   return Math.max(0.001, Math.min(0.999, requestedPrice + slip));
 }
 
@@ -154,7 +154,7 @@ export class OrderManager {
 
     if (mockShouldFill()) {
       const fillPrice = mockFillPrice(input.price);
-      const fees = input.sizeUsd * 0.002; // 0.2% mock fee
+      const fees = input.sizeUsd * 0.001; // 0.1% mock fee (Polymarket actual fee)
 
       // Update order as filled
       await orderService.updateStatus(order.id, 'filled', {

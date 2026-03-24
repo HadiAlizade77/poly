@@ -132,3 +132,11 @@ export function emitTradingState(state: string): void {
     timestamp: new Date().toISOString(),
   });
 }
+
+export function emitBtcBotStatus(payload: WsEventMap['btc-bot:status']): void {
+  emit(WS_CHANNELS.BTC_BOT_STATUS, payload);
+}
+
+export function emitBtcBotTrade(payload: WsEventMap['btc-bot:trade']): void {
+  emit(WS_CHANNELS.BTC_BOT_TRADE, payload);
+}

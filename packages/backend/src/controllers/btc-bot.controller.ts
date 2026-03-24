@@ -14,9 +14,11 @@ import * as systemConfigService from '../services/system-config.service.js';
 import * as aiDecisionService from '../services/ai-decision.service.js';
 import type { BtcSignals } from '../services/btc-5min/signals.js';
 
-const BOT_ACTIVE_KEY    = 'BTC_5MIN_BOT_ACTIVE';
-const SIGNALS_REDIS_KEY = 'btc-5min:latest-signals';
-const STATUS_REDIS_KEY  = 'btc-5min:status';
+const BOT_ACTIVE_KEY      = 'BTC_5MIN_BOT_ACTIVE';
+const SIGNALS_REDIS_KEY   = 'btc-5min:latest-signals';
+const STATUS_REDIS_KEY    = 'btc-5min:status';
+const ACTIVITY_LOG_KEY    = 'btc-5min:activity-log';
+const ACTIVITY_LOG_MAX    = 200; // Redis list cap
 
 // ─── Start bot ────────────────────────────────────────────────────────────────
 
@@ -180,6 +182,158 @@ export async function getBotStatus(
       stats,
       last_decision,
     });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── Trade log ────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/btc-bot/trades
+ *
+ * Returns the last 50 trades from BTC-related markets (title contains 'btc' or
+ * 'bitcoin'), joined with their source AI decision for reasoning data.
+ * Each row is shaped into a unified entry with: timestamp, action, side, price,
+ * size, pnl (if a closed position exists for the same market/token), and
+ * ai_reasoning.
+ */
+export async function getTrades(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    // 1. Find BTC-related markets.
+    const btcMarkets = await prisma.market.findMany({
+      where: {
+        OR: [
+          { title: { contains: 'btc',     mode: 'insensitive' } },
+          { title: { contains: 'bitcoin', mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true },
+    });
+
+    const marketIds = btcMarkets.map((m) => m.id);
+
+    if (marketIds.length === 0) {
+      sendItem(res, { trades: [], ai_decisions: [] });
+      return;
+    }
+
+    // 2. Query trades with order + decision data.
+    const trades = await prisma.trade.findMany({
+      where:   { market_id: { in: marketIds } },
+      orderBy: { executed_at: 'desc' },
+      take:    50,
+      include: {
+        order:    { select: { side: true, outcome_token: true, status: true } },
+        decision: {
+          select: {
+            action:    true,
+            direction: true,
+            reasoning: true,
+            confidence: true,
+          },
+        },
+      },
+    });
+
+    // 3. Fetch closed-position PnL for the same markets (keyed by market_id + outcome_token).
+    const closedPositions = await prisma.positionHistory.findMany({
+      where:   { market_id: { in: marketIds } },
+      select:  { market_id: true, outcome_token: true, realized_pnl: true },
+    });
+
+    const pnlMap = new Map<string, number>();
+    for (const p of closedPositions) {
+      const key = `${p.market_id}:${p.outcome_token}`;
+      pnlMap.set(key, Number(p.realized_pnl));
+    }
+
+    // 4. Shape output.
+    const tradeEntries = trades.map((t) => {
+      const pnlKey = `${t.market_id}:${t.outcome_token}`;
+      return {
+        timestamp:    t.executed_at,
+        action:       t.decision?.action ?? 'trade',
+        side:         t.outcome_token,               // YES / NO token name
+        order_side:   t.order.side,                  // buy / sell
+        price:        Number(t.entry_price),
+        size:         Number(t.size),
+        pnl:          pnlMap.get(pnlKey) ?? null,
+        ai_reasoning: t.decision?.reasoning ?? null,
+        confidence:   t.decision ? Number(t.decision.confidence) : null,
+      };
+    });
+
+    // 5. Query recent AI decisions for BTC markets (hold + trade).
+    const aiDecisions = await prisma.aiDecision.findMany({
+      where:   { market_id: { in: marketIds } },
+      orderBy: { timestamp: 'desc' },
+      take:    50,
+      select:  {
+        id:           true,
+        timestamp:    true,
+        action:       true,
+        direction:    true,
+        outcome_token: true,
+        confidence:   true,
+        reasoning:    true,
+        was_executed: true,
+        market_price: true,
+        estimated_edge: true,
+      },
+    });
+
+    const decisionEntries = aiDecisions.map((d) => ({
+      timestamp:      d.timestamp,
+      action:         d.action,
+      side:           d.outcome_token ?? null,
+      direction:      d.direction ?? null,
+      price:          d.market_price ? Number(d.market_price) : null,
+      size:           null,
+      pnl:            null,
+      ai_reasoning:   d.reasoning,
+      confidence:     Number(d.confidence),
+      was_executed:   d.was_executed,
+      estimated_edge: d.estimated_edge ? Number(d.estimated_edge) : null,
+    }));
+
+    sendItem(res, { trades: tradeEntries, ai_decisions: decisionEntries });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ─── Activity log (Redis) ─────────────────────────────────────────────────────
+
+/**
+ * GET /api/btc-bot/logs
+ *
+ * Returns the bot's recent activity log from Redis list `btc-5min:activity-log`.
+ * The list is populated by the bot process itself via LPUSH + LTRIM.
+ * Entries are stored as JSON strings; this endpoint parses and returns them.
+ */
+export async function getLogs(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const raw = await redis.lrange(ACTIVITY_LOG_KEY, 0, ACTIVITY_LOG_MAX - 1);
+
+    const entries = raw.map((item) => {
+      try {
+        return JSON.parse(item) as unknown;
+      } catch {
+        // If an entry is not valid JSON just pass it through as a string.
+        return { message: item };
+      }
+    });
+
+    sendItem(res, { log: entries, count: entries.length });
   } catch (err) {
     next(err);
   }

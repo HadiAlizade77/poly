@@ -11,15 +11,15 @@ import { WS_CHANNELS } from '../websocket/channels.js';
 
 const INTERVAL_MS = 30_000;
 
-// The 7 PM2-managed service names the frontend expects.
+// The PM2-managed service names the frontend expects.
 const PM2_SERVICE_NAMES = [
   'api-server',
   'market-scanner',
   'data-ingestion',
   'decision-engine',
   'execution-manager',
-  'ai-reviewer',
   'scheduler',
+  'btc-5min-bot',
 ] as const;
 
 export interface ServiceStatus {

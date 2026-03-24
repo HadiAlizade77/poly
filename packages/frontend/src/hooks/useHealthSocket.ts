@@ -54,7 +54,6 @@ const KNOWN_SERVICES: ServiceStatus[] = [
   { name: 'data-ingestion',    status: 'unknown' },
   { name: 'decision-engine',   status: 'unknown' },
   { name: 'execution-manager', status: 'unknown' },
-  { name: 'ai-reviewer',       status: 'unknown' },
   { name: 'scheduler',         status: 'unknown' },
 ]
 
@@ -102,7 +101,7 @@ export function useHealthSocket() {
   const merged: SystemHealthPayload | null = health
     ? {
         ...health,
-        // Merge live services on top of known list so we always show all 7
+        // Merge live services on top of known list so we always show all 6
         services: health.services
           ? KNOWN_SERVICES.map((known) => {
               const live = health.services!.find((s) => s.name === known.name)

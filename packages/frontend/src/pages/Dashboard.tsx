@@ -37,7 +37,6 @@ const ENGINE_PROCESSES = [
   { name: 'market-scanner',    label: 'Market Scanner',     desc: 'Fetches markets every 60s'   },
   { name: 'decision-engine',   label: 'AI Decision Engine', desc: 'Evaluates markets every 5min'},
   { name: 'execution-manager', label: 'Trade Executor',     desc: 'Places orders & monitors exits'},
-  { name: 'ai-reviewer',       label: 'AI Reviewer',        desc: 'Analyzes performance daily'  },
 ]
 
 function statusDotClass(status: string) {

@@ -13,6 +13,8 @@ export const WS_CHANNELS = {
   BANKROLL_UPDATE: 'bankroll:update',
   SYSTEM_HEALTH: 'system:health',
   TRADING_STATE: 'trading:state',
+  BTC_BOT_STATUS: 'btc-bot:status',
+  BTC_BOT_TRADE: 'btc-bot:trade',
 } as const;
 
 export type WsChannel = (typeof WS_CHANNELS)[keyof typeof WS_CHANNELS];
@@ -29,4 +31,34 @@ export interface WsEventMap {
   'bankroll:update': { data: unknown };
   'system:health': { status: string; uptime: number; timestamp: string };
   'trading:state': { state: string; timestamp: string };
+  'btc-bot:status': {
+    signals: unknown;
+    activeMarket: {
+      id: string;
+      title: string;
+      endDate: string | null;
+      yesPrice: number;
+      noPrice: number;
+      yesTokenId?: string;
+      noTokenId?: string;
+      conditionId?: string | null;
+      priceToBeat?: number | null;
+      isSynthetic?: boolean;
+    } | null;
+    state: string;
+    windowTradeCount: number;
+    sessionTrades: number;
+    sessionPnl: number;
+    lastAction: string | null;
+    lastActionTime: string | null;
+    timestamp: string;
+  };
+  'btc-bot:trade': {
+    type: 'trade';
+    side: 'YES' | 'NO';
+    price: number;
+    size: number;
+    action: 'BUY' | 'SELL' | 'FLIP';
+    timestamp: string;
+  };
 }

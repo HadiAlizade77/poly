@@ -1431,7 +1431,7 @@ function BtcBotHealthWidget() {
         <div className="bg-surface-2 rounded px-2 py-1.5">
           <p className="text-muted-foreground mb-0.5">Windows</p>
           <p className="font-numeric text-slate-300">
-            {botStatus ? botStatus.windowsTradedCount : '—'}
+            {botStatus ? botStatus.windowTradeCount : '—'}
           </p>
         </div>
       </div>
@@ -1911,7 +1911,7 @@ export default function Settings() {
   const isHealthTab = activeTab === 'health'
 
   return (
-    <div className={cn('space-y-6', !isHealthTab && 'max-w-4xl')}>
+    <div className={cn('space-y-6')}>
       <PageHeader
         title="Settings"
         subtitle="Platform configuration, risk management, and system health"
