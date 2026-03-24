@@ -1,30 +1,28 @@
 /**
- * BTC 5-Min Scalper Bot — Momentum Scalp with Take-Profit Tiers
+ * BTC 5-Min Scalper Bot — "Binary Resolution Rider" Strategy V4
  *
- * Strategy: Enter early on momentum, take profit aggressively, cut losses
- * quickly, never force-close at bad prices.
+ * KEY INSIGHT: These are binary markets resolving to 0 or 1. The math:
+ *   Entry at 50¢ → need >50% win rate to profit
+ *   Entry at 60¢ → need >60% (too hard)
+ *   Entry at 40¢ → need only >40% (easy with priceToBeat signal)
  *
- * State machine per cycle:
- *   FLAT      -> signal UP   -> BUY YES  -> LONG_YES
- *   FLAT      -> signal DOWN -> BUY NO   -> LONG_NO
- *   LONG_YES  -> take-profit hit   -> CLOSE YES -> FLAT
- *   LONG_YES  -> stop-loss hit     -> CLOSE YES -> FLAT
- *   LONG_YES  -> signal weakened   -> CLOSE YES -> FLAT
- *   LONG_NO   -> take-profit hit   -> CLOSE NO  -> FLAT
- *   LONG_NO   -> stop-loss hit     -> CLOSE NO  -> FLAT
- *   LONG_NO   -> signal weakened   -> CLOSE NO  -> FLAT
+ * Therefore: ENTER EARLY at ~50¢ using priceToBeat as direction signal,
+ * then HOLD TO RESOLUTION. No stop-loss (causes whipsaw in volatile markets),
+ * no take-profit (binary payout maximizes gains). Let the market resolve.
  *
- * No flips — close to FLAT and re-evaluate on next cycle.
+ * Strategy:
+ *   1. Wait 15-30s into window (let BTC establish initial direction vs priceToBeat)
+ *   2. If BTC > priceToBeat + $15: BUY UP at ~50¢ (cheap entry)
+ *      If BTC < priceToBeat - $15: BUY DOWN at ~50¢
+ *      If within $15: SKIP (no edge, it's a coin flip)
+ *   3. HOLD TO RESOLUTION — no stop-loss, no take-profit
+ *      Exception: emergency exit if BTC crosses hard through priceToBeat wrong way (>$50 delta)
+ *   4. ONE trade per window max — if wrong, accept the loss, wait for next window
+ *   5. Position size scales with priceToBeat delta magnitude and risk appetite
  *
- * One AI call per window (at window start). Intra-window trades are
- * deterministic based on signal thresholds + price-based TP/SL.
- *
- * Respects:
- *   - RISK_APPETITE from system_config
- *   - Sandbox/mock execution mode (via orderManager + positionManager)
- *   - Start/stop via system_config BTC_5MIN_BOT_ACTIVE
- *   - maxTradesPerWindow limit to prevent excessive trading
- *   - Lowered thresholds in sandbox mode for more active trading
+ * Why no stop-loss? Live testing showed -20% and -35% stops fire constantly
+ * from normal market noise. These markets swing ±30% within seconds. Stops
+ * just guarantee frequent small losses instead of letting binary payouts work.
  */
 import type { Prisma } from '@prisma/client';
 import logger from '../../config/logger.js';
@@ -52,29 +50,30 @@ const BOT_ACTIVE_KEY     = 'BTC_5MIN_BOT_ACTIVE';
 const ACTIVITY_LOG_KEY   = 'btc-5min:activity-log';
 const ACTIVITY_LOG_MAX   = 200;
 
-/** Default max trades per 5-min window (prevents runaway trading). */
-const DEFAULT_MAX_TRADES_PER_WINDOW = 5;
+/** ONE trade per window. If wrong, accept the loss. No re-entries. */
+const DEFAULT_MAX_TRADES_PER_WINDOW = 1;
 
-/** Don't enter positions in the last N ms of a window. */
-const WINDOW_NO_ENTRY_MS = 20_000; // Don't open new positions in last 20s of window
+/** 5-minute window duration in ms. */
+const WINDOW_DURATION_MS = 300_000;
 
-/** Safety-close losing positions when window has less than this many ms remaining. */
-const WINDOW_SAFETY_CLOSE_MS = 30_000;
+/** Enter between 15s and 240s into the window (sweet spot for cheap entry + directional info). */
+const WINDOW_ENTRY_MIN_MS = 15_000;  // Wait at least 15s for BTC to show direction
+const WINDOW_ENTRY_MAX_MS = 240_000; // Don't enter in last 60s (too late, prices already extreme)
 
-/** Direction score threshold for sandbox mode (lower = more trades). */
-const SANDBOX_DIRECTION_THRESHOLD = 12;
-/** Direction score threshold for live mode. */
-const LIVE_DIRECTION_THRESHOLD    = 20;
+/** Emergency exit: if BTC crosses this far through priceToBeat on the WRONG side, cut loss.
+ *  Otherwise, hold to resolution. */
+const EMERGENCY_EXIT_DELTA = 50; // $50 wrong-side delta triggers exit
 
-/** Default minimum hold time in ms before the bot can exit a position. */
-const DEFAULT_MIN_HOLD_TIME_MS = 30_000;
+/** Minimum priceToBeat delta (in $) to consider entering. Below this = coin flip, skip. */
+const MIN_PTB_DELTA = 15;
 
-/** Max price to buy a side — avoid entering when no edge. */
-const MAX_ENTRY_PRICE = 0.65; // Don't buy a side priced above 65¢ (need 35%+ upside)
+/** Maximum entry price — don't buy a side above 58¢ (need cheap entry for binary math). */
+const MAX_ENTRY_PRICE = 0.58;
 
-/** Mid-range avoidance: don't enter when both sides are in this band. */
-const MID_RANGE_LOW  = 0.40;
-const MID_RANGE_HIGH = 0.60;
+/** No fixed stop-loss — hold to resolution. Emergency exit only on extreme wrong-side delta. */
+
+/** Minimum hold time (short — mainly to prevent immediate exit on same cycle). */
+const DEFAULT_MIN_HOLD_TIME_MS = 10_000;
 
 // ─── Risk config types ───────────────────────────────────────────────────────
 
@@ -86,57 +85,10 @@ interface RiskLimits {
   minHoldTimeMs: number;
 }
 
-// ─── Take-profit / stop-loss tiers ──────────────────────────────────────────
-
-/**
- * Returns take-profit and stop-loss percentage thresholds based on risk appetite.
- *
- * Lower risk = take profit sooner + tighter stop.
- * Higher risk = let it run + wider stop.
- */
-function getTakeProfitAndStopLoss(riskAppetite: number): { takeProfitPct: number; stopLossPct: number } {
-  if (riskAppetite <= 3) return { takeProfitPct: 0.10, stopLossPct: 0.05 };
-  if (riskAppetite <= 6) return { takeProfitPct: 0.20, stopLossPct: 0.10 };
-  if (riskAppetite <= 9) return { takeProfitPct: 0.35, stopLossPct: 0.15 };
-  return { takeProfitPct: 0.50, stopLossPct: 0.20 };
-}
-
-// ─── Scalper state ───────────────────────────────────────────────────────────
-
-type ScalperState = 'flat' | 'long_yes' | 'long_no';
-
-// ─── AI response shape ───────────────────────────────────────────────────────
-
-interface WindowAiResponse {
-  bias:       'bullish' | 'bearish' | 'neutral';
-  confidence: number;
-  reasoning:  string;
-}
-
-// ─── Threshold helpers ───────────────────────────────────────────────────────
-
-function computeThresholds(riskAppetite: number, isSandbox: boolean) {
-  const appetiteScale = riskAppetite / 5; // 0.2 to 2.0
-
-  // In sandbox mode, use much lower thresholds so the bot trades actively
-  const baseEntry = isSandbox ? SANDBOX_DIRECTION_THRESHOLD : LIVE_DIRECTION_THRESHOLD;
-
-  // Entry threshold: direction score must exceed +/-ENTRY to open a position
-  const ENTRY_THRESHOLD = Math.max(5, baseEntry / appetiteScale);
-  // Exit threshold (hysteresis): score must cross back past +/-3 to exit
-  const EXIT_THRESHOLD = Math.max(2, 3 / appetiteScale);
-
-  // Minimum hold time scales inversely with appetite
-  const minHoldTimeMs = Math.round(DEFAULT_MIN_HOLD_TIME_MS / appetiteScale);
-
-  return { ENTRY_THRESHOLD, EXIT_THRESHOLD, appetiteScale, minHoldTimeMs };
-}
+// ─── Trade sizing ────────────────────────────────────────────────────────────
 
 /**
  * Risk tier configuration for trade sizing.
- *
- * Each tier defines the min/base/max trade for a range of risk appetite levels.
- * maxBalancePct caps the trade at a percentage of the available balance.
  */
 interface RiskTier {
   minTrade: number;
@@ -151,21 +103,17 @@ function getRiskTier(riskAppetite: number): RiskTier {
   return                          { minTrade: 5, baseTrade: 5,  maxBalancePct: 0.01 };
 }
 
+/**
+ * Compute trade size. No longer depends on direction_score — sizing is based
+ * on risk appetite tier and entry price edge only.
+ */
 function computeTradeSize(
   balance: number,
-  directionScore: number,
   entryPrice: number,
   riskAppetite: number,
   maxSingleTrade: number,
 ): number {
   const tier = getRiskTier(riskAppetite);
-
-  // Score multiplier: how strong is the directional signal?
-  // score 0-14 = 1.0x, score 15-24 = 1.0x, score 25-34 = 1.25x, score 35+ = 1.5x
-  const scoreAbs = Math.abs(directionScore);
-  const scoreMultiplier = scoreAbs >= 35 ? 1.5
-    : scoreAbs >= 25 ? 1.25
-    : 1.0;
 
   // Price edge multiplier: cheaper entry = more upside = bigger trade
   // < 0.25 = 1.75x, < 0.35 = 1.5x, < 0.45 = 1.2x, else 1.0x
@@ -174,7 +122,7 @@ function computeTradeSize(
     : entryPrice < 0.45 ? 1.2
     : 1.0;
 
-  const rawSize = tier.baseTrade * scoreMultiplier * priceEdgeMultiplier;
+  const rawSize = tier.baseTrade * priceEdgeMultiplier;
 
   // Cap at balance percentage and maxSingleTrade from risk config
   const maxFromBalance = balance * tier.maxBalancePct;
@@ -184,8 +132,6 @@ function computeTradeSize(
     riskAppetite,
     tier: riskAppetite >= 10 ? 'maximum' : riskAppetite >= 7 ? 'aggressive' : riskAppetite >= 4 ? 'balanced' : 'conservative',
     baseTrade: tier.baseTrade,
-    scoreAbs: scoreAbs.toFixed(1),
-    scoreMultiplier,
     entryPrice: entryPrice.toFixed(3),
     priceEdgeMultiplier,
     rawSize: rawSize.toFixed(2),
@@ -196,6 +142,18 @@ function computeTradeSize(
   });
 
   return finalSize;
+}
+
+// ─── Scalper state ───────────────────────────────────────────────────────────
+
+type ScalperState = 'flat' | 'long_yes' | 'long_no';
+
+// ─── AI response shape ───────────────────────────────────────────────────────
+
+interface WindowAiResponse {
+  bias:       'bullish' | 'bearish' | 'neutral';
+  confidence: number;
+  reasoning:  string;
 }
 
 // ─── Bot ─────────────────────────────────────────────────────────────────────
@@ -224,6 +182,9 @@ export class Btc5MinBot {
   private positionEnteredAt: number | null = null;
   private lastEntryPrice = 0;
 
+  /** If true, bot was stopped out this window and will NOT re-enter. */
+  private stoppedOutThisWindow = false;
+
   // Stats for current session
   private sessionTrades = 0;
   private sessionPnl    = 0;
@@ -232,7 +193,7 @@ export class Btc5MinBot {
   private consecutiveLosses   = 0;
   private dailyPnl            = 0;
   private dailyPnlResetDate   = new Date().toDateString();
-  private totalDeployed        = 0;  // sum of open position sizes
+  private totalDeployed        = 0;
 
   // Last action description (for status cache)
   private lastAction     = 'INIT';
@@ -246,8 +207,8 @@ export class Btc5MinBot {
     if (this.running) return;
     this.running = true;
 
-    logger.info('Btc5MinBot: starting scalper', { cycleMs: this.cycleMs });
-    void this.appendLog('info', 'Bot started');
+    logger.info('Btc5MinBot: starting scalper (Follow The Market strategy)', { cycleMs: this.cycleMs });
+    void this.appendLog('info', 'Bot started (Follow The Market strategy v2)');
 
     // Run first cycle immediately, then on interval
     void this.runCycle();
@@ -297,7 +258,6 @@ export class Btc5MinBot {
       if (signals) {
         logger.info('Btc5MinBot: signal computed', {
           directionScore: signals.direction_score.toFixed(1),
-          suggestedSide:  signals.suggested_side ?? 'skip',
           trend:          signals.trend,
           confidence:     signals.confidence.toFixed(3),
           rsi:            signals.rsi.toFixed(1),
@@ -314,7 +274,7 @@ export class Btc5MinBot {
 
       // 3. Find active BTC 5-min market (real or synthetic in sandbox)
       const market = await findActiveBtcMarket();
-      this.currentMarket = market; // store for fast price refresh loop
+      this.currentMarket = market;
 
       if (!market) {
         // No market — close any leftover position from a vanished window
@@ -344,7 +304,7 @@ export class Btc5MinBot {
         windowEnd:   market.endDate?.toISOString() ?? 'none',
       });
 
-      // 4. Check sandbox mode for threshold adjustments
+      // 4. Check sandbox mode
       const isSandbox = await systemConfigService.getValue<boolean>('SANDBOX_ACTIVE');
 
       // 5. If new window (different market ID or different window end time) OR synthetic refresh
@@ -361,49 +321,20 @@ export class Btc5MinBot {
       this.lastKnownYesPrice = market.yesPrice;
       this.lastKnownNoPrice  = market.noPrice;
 
-      // 7. Window expiry management — price-aware safety close
+      // 7. Window expiry — V4 strategy: HOLD TO RESOLUTION
+      //    Don't close positions at window end. The binary payout IS the strategy.
+      //    Position will be closed by onNewWindow() when the next window starts.
       if (market.endDate && this.currentPositionId) {
         const msRemaining = market.endDate.getTime() - Date.now();
-        if (msRemaining < WINDOW_SAFETY_CLOSE_MS) {
-          // Check if position is profitable or losing
+        if (msRemaining < 30_000) {
+          const sideLabel = this.currentSide === 'YES' ? 'Up' : 'Down';
           const currentPrice = this.currentSide === 'YES'
-            ? this.lastKnownYesPrice
-            : this.lastKnownNoPrice;
-          const pnlPct = this.lastEntryPrice > 0
-            ? (currentPrice - this.lastEntryPrice) / this.lastEntryPrice
-            : 0;
-
-          if (pnlPct < 0) {
-            // LOSING — cut before resolution makes it worse
-            const sideLabel = this.currentSide === 'YES' ? 'Up' : 'Down';
-            logger.info('Btc5MinBot: window expiring, closing LOSING position', {
-              msRemaining,
-              positionId: this.currentPositionId,
-              side: `${sideLabel} (${this.currentSide})`,
-              entryPrice: this.lastEntryPrice,
-              currentPrice,
-              pnlPct: (pnlPct * 100).toFixed(1) + '%',
-            });
-            await this.closeCurrentPosition('window-expiry-loss-cut');
-            this.lastAction     = `SAFETY CLOSE ${sideLabel} (losing ${(pnlPct * 100).toFixed(1)}%, window expiring)`;
-            this.lastActionTime = new Date().toISOString();
-            void this.appendLog('close', `Safety close ${sideLabel} — losing ${(pnlPct * 100).toFixed(1)}%, window expiring`, {
-              side: this.currentSide, sideLabel, msRemaining, pnlPct,
-            });
-            await this.cacheStatus(signals, market);
-            return;
-          } else {
-            // PROFITABLE — let it ride to resolution
-            const sideLabel = this.currentSide === 'YES' ? 'Up' : 'Down';
-            logger.info('Btc5MinBot: window expiring but position profitable, letting it ride', {
-              msRemaining,
-              side: `${sideLabel} (${this.currentSide})`,
-              entryPrice: this.lastEntryPrice,
-              currentPrice,
-              pnlPct: (pnlPct * 100).toFixed(1) + '%',
-            });
-            this.lastAction = `HOLD ${sideLabel} (winning +${(pnlPct * 100).toFixed(1)}%, riding to resolution)`;
-          }
+            ? this.lastKnownYesPrice : this.lastKnownNoPrice;
+          logger.info('Btc5MinBot: window closing, holding to resolution', {
+            msRemaining: Math.round(msRemaining / 1000) + 's',
+            side: sideLabel, currentPrice, entryPrice: this.lastEntryPrice,
+          });
+          this.lastAction = `HOLDING ${sideLabel} to resolution (${Math.round(msRemaining / 1000)}s left, price=${(currentPrice * 100).toFixed(0)}c)`;
         }
       }
 
@@ -465,14 +396,21 @@ export class Btc5MinBot {
         return;
       }
 
-      const { ENTRY_THRESHOLD, EXIT_THRESHOLD, appetiteScale, minHoldTimeMs } =
-        computeThresholds(riskAppetite, !!isSandbox);
-
-      // Override risk limits with appetite-scaled values
-      riskLimits.minHoldTimeMs = minHoldTimeMs;
-
-      // Get TP/SL thresholds based on risk appetite
-      const { takeProfitPct, stopLossPct } = getTakeProfitAndStopLoss(riskAppetite);
+      // Log risk config being used this cycle
+      logger.info('Btc5MinBot: risk config', {
+        riskAppetite,
+        maxSingleTrade: riskLimits.maxSingleTrade,
+        maxPositionSize: riskLimits.maxPositionSize,
+        maxDailyLoss: riskLimits.maxDailyLoss,
+        maxConsecutiveLosses: riskLimits.maxConsecutiveLosses,
+        minHoldTimeMs: riskLimits.minHoldTimeMs,
+        strategy: 'binary-resolution-rider-v4',
+        emergencyExitDelta: `$${EMERGENCY_EXIT_DELTA}`,
+        minPtbDelta: `$${MIN_PTB_DELTA}`,
+        dailyPnl: this.dailyPnl,
+        consecutiveLosses: this.consecutiveLosses,
+        stoppedOutThisWindow: this.stoppedOutThisWindow,
+      });
 
       // Reset daily PnL tracking at the start of each new day
       const today = new Date().toDateString();
@@ -481,23 +419,6 @@ export class Btc5MinBot {
         this.dailyPnlResetDate = today;
         this.consecutiveLosses = 0;
       }
-
-      // Log risk config being used this cycle
-      logger.info('Btc5MinBot: risk config', {
-        riskAppetite,
-        appetiteScale,
-        maxSingleTrade: riskLimits.maxSingleTrade,
-        maxPositionSize: riskLimits.maxPositionSize,
-        maxDailyLoss: riskLimits.maxDailyLoss,
-        maxConsecutiveLosses: riskLimits.maxConsecutiveLosses,
-        minHoldTimeMs: riskLimits.minHoldTimeMs,
-        takeProfitPct: (takeProfitPct * 100).toFixed(0) + '%',
-        stopLossPct: (stopLossPct * 100).toFixed(0) + '%',
-        entryThreshold: ENTRY_THRESHOLD,
-        exitThreshold: EXIT_THRESHOLD,
-        dailyPnl: this.dailyPnl,
-        consecutiveLosses: this.consecutiveLosses,
-      });
 
       // Check daily loss limit — skip trading if exceeded
       if (this.dailyPnl < 0 && Math.abs(this.dailyPnl) >= riskLimits.maxDailyLoss) {
@@ -521,7 +442,6 @@ export class Btc5MinBot {
         return;
       }
 
-      const score = signals.direction_score;
       const state = this.getState();
 
       // Compute time remaining in window for entry filter
@@ -529,15 +449,21 @@ export class Btc5MinBot {
         ? market.endDate.getTime() - Date.now()
         : Infinity;
 
+      // Compute time elapsed in window
+      const msElapsed = msRemaining === Infinity
+        ? Infinity
+        : WINDOW_DURATION_MS - msRemaining;
+
       logger.info('Btc5MinBot: evaluating state machine', {
         state,
-        score:           score.toFixed(1),
-        entryThreshold:  ENTRY_THRESHOLD.toFixed(1),
-        exitThreshold:   EXIT_THRESHOLD.toFixed(1),
         isSandbox:       !!isSandbox,
         windowTrades:    `${this.windowTradeCount}/${this.maxTradesPerWindow}`,
         balance:         availableBalance.toFixed(2),
         msRemaining:     msRemaining === Infinity ? 'N/A' : msRemaining,
+        msElapsed:       msElapsed === Infinity ? 'N/A' : msElapsed,
+        stoppedOut:      this.stoppedOutThisWindow,
+        yesPrice:        market.yesPrice.toFixed(3),
+        noPrice:         market.noPrice.toFixed(3),
       });
 
       // 12. Check minimum hold time — don't exit within min hold time
@@ -560,12 +486,10 @@ export class Btc5MinBot {
         canExit,
         entryPrice:     this.lastEntryPrice || 'N/A',
         pricePnlPct:    this.currentPositionId ? (pricePnlPct * 100).toFixed(1) + '%' : 'N/A',
-        takeProfitAt:   this.currentPositionId ? '+' + (takeProfitPct * 100).toFixed(0) + '%' : 'N/A',
-        stopLossAt:     this.currentPositionId ? '-' + (stopLossPct * 100).toFixed(0) + '%' : 'N/A',
+        strategy:       'hold-to-resolution (emergency exit at $' + EMERGENCY_EXIT_DELTA + ' wrong-side)',
       });
 
-      // 13b. Log priceToBeat comparison each cycle so we know the reference price
-      //      and whether BTC is currently above or below it.
+      // 13b. Log priceToBeat comparison each cycle
       const ptb = this.currentPriceToBeat;
       const btcNow = signals.current_price;
       if (ptb != null) {
@@ -587,254 +511,162 @@ export class Btc5MinBot {
       const currentDeployed = bankroll ? Number(bankroll.deployed_balance) : 0;
       const canOpenNew = currentDeployed < riskLimits.maxPositionSize;
 
-      // 15. State machine decision
+      // 15. State machine — "Binary Resolution Rider" V4
+      //     Enter early at cheap prices using priceToBeat delta as sole signal.
+      //     Hold to resolution. No TP/SL — binary payout handles it.
+      //     Emergency exit only if BTC moves $50+ wrong side of priceToBeat.
+      const ptbDelta = (ptb != null && btcNow > 0) ? btcNow - ptb! : 0;
+      const absDelta = Math.abs(ptbDelta);
+
       switch (state) {
         case 'flat': {
-          // --- Entry filters ---
-          // Time filter: don't enter in the last 60s of a window
-          if (msRemaining < WINDOW_NO_ENTRY_MS) {
+          // Already traded this window? Don't re-enter.
+          if (this.stoppedOutThisWindow || this.windowTradeCount >= this.maxTradesPerWindow) {
+            this.lastAction = `FLAT (already traded this window, waiting for next)`;
+            break;
+          }
+
+          // Timing: enter between 15s and 240s into the window
+          if (msElapsed !== Infinity && msElapsed < WINDOW_ENTRY_MIN_MS) {
+            this.lastAction = `FLAT (waiting ${Math.round((WINDOW_ENTRY_MIN_MS - msElapsed) / 1000)}s for BTC direction)`;
+            break;
+          }
+          if (msRemaining < (WINDOW_DURATION_MS - WINDOW_ENTRY_MAX_MS)) {
             this.lastAction = `FLAT (too late, ${Math.round(msRemaining / 1000)}s left)`;
-            logger.info('Btc5MinBot: FLAT — too late to enter', { msRemaining });
             break;
           }
 
-          // Position size limit
+          // Position limit
           if (!canOpenNew) {
-            this.lastAction = `POSITION LIMIT ($${currentDeployed.toFixed(2)} >= $${riskLimits.maxPositionSize})`;
-            logger.info('Btc5MinBot: FLAT — position size limit reached', {
-              totalDeployed: currentDeployed,
-              maxPositionSize: riskLimits.maxPositionSize,
+            this.lastAction = `POSITION LIMIT ($${currentDeployed.toFixed(0)} >= $${riskLimits.maxPositionSize})`;
+            break;
+          }
+
+          // Need priceToBeat to make a decision
+          if (ptb == null) {
+            this.lastAction = `FLAT (priceToBeat not available)`;
+            break;
+          }
+
+          // Need minimum delta to have edge — below this it's a coin flip
+          if (absDelta < MIN_PTB_DELTA) {
+            this.lastAction = `FLAT (BTC delta $${ptbDelta.toFixed(0)} too small, need >$${MIN_PTB_DELTA})`;
+            logger.info('Btc5MinBot: FLAT — delta too small, coin flip territory', {
+              btcPrice: btcNow.toFixed(2), priceToBeat: ptb.toFixed(2),
+              delta: `$${ptbDelta.toFixed(0)}`, minDelta: `$${MIN_PTB_DELTA}`,
             });
             break;
           }
 
-          // (mid-range filter removed — the bot should trade early in the window
-          // when prices are near 50/50 and the score gives a directional signal)
-
-          // Compute priceToBeat-adjusted score.
-          //
-          // The Chainlink reference price tells us where BTC started this window.
-          // If BTC is currently ABOVE priceToBeat the window is already trending Up,
-          // which corroborates a bullish signal — add up to +5 points to the score.
-          // If BTC is BELOW priceToBeat the window is trending Down, corroborating
-          // a bearish signal — subtract up to 5 points (making bearish entries easier).
-          // When priceToBeat is unavailable the score is unchanged.
-          let adjustedScore = score;
-          const ptbForEntry = this.currentPriceToBeat;
-          if (ptbForEntry != null && btcNow > 0) {
-            // deltaPct: +1 = 1% above reference, -1 = 1% below reference
-            const ptbDeltaPct = ((btcNow - ptbForEntry) / ptbForEntry) * 100;
-            // Scale: each 0.1% move adds ±1 point, capped at ±5
-            const ptbBonus = Math.max(-5, Math.min(5, ptbDeltaPct * 10));
-            adjustedScore = score + ptbBonus;
-            logger.info('Btc5MinBot: priceToBeat score adjustment', {
-              rawScore:      score.toFixed(1),
-              ptbDeltaPct:   `${ptbDeltaPct >= 0 ? '+' : ''}${ptbDeltaPct.toFixed(3)}%`,
-              ptbBonus:      `${ptbBonus >= 0 ? '+' : ''}${ptbBonus.toFixed(2)}`,
-              adjustedScore: adjustedScore.toFixed(1),
-            });
-          }
-
-          if (adjustedScore > ENTRY_THRESHOLD) {
-            // --- Buy YES (bullish) ---
-            // Price filter: only buy YES if yesPrice < 0.60
-            if (market.yesPrice >= MAX_ENTRY_PRICE) {
-              this.lastAction = `FLAT (YES too expensive: ${(market.yesPrice * 100).toFixed(0)}c)`;
-              logger.info('Btc5MinBot: FLAT — YES price too high for entry', {
-                yesPrice: market.yesPrice, maxEntry: MAX_ENTRY_PRICE,
-              });
-              break;
-            }
-
-            // Momentum logged but not required — direction score already incorporates it
-
-            const size = computeTradeSize(availableBalance, score, market.yesPrice, riskAppetite, riskLimits.maxSingleTrade);
-            const tpTarget = market.yesPrice * (1 + takeProfitPct);
-            const slTarget = market.yesPrice * (1 - stopLossPct);
-            logger.info('Btc5MinBot: FLAT -> BUY YES decision', {
-              score, threshold: ENTRY_THRESHOLD, size: size.toFixed(2),
-              entry: market.yesPrice, takeProfit: tpTarget.toFixed(3), stopLoss: slTarget.toFixed(3),
+          // ENTRY DECISION based purely on BTC vs priceToBeat
+          if (ptbDelta > 0 && market.yesPrice <= MAX_ENTRY_PRICE) {
+            // BTC is ABOVE priceToBeat → market should resolve UP → BUY UP (YES)
+            const size = computeTradeSize(availableBalance, market.yesPrice, riskAppetite, riskLimits.maxSingleTrade);
+            logger.info('Btc5MinBot: FLAT -> BUY UP (BTC above PtB)', {
+              btcPrice: btcNow.toFixed(2), priceToBeat: ptb.toFixed(2),
+              delta: `+$${ptbDelta.toFixed(0)}`, yesPrice: market.yesPrice.toFixed(3),
+              size: size.toFixed(2), strategy: 'hold-to-resolution',
             });
             const posId = await this.executeTrade(market, 'YES', size, this.windowAiDecisionId!);
             if (posId) {
               this.currentPositionId = posId;
-              this.currentSide       = 'YES';
+              this.currentSide = 'YES';
               this.positionEnteredAt = Date.now();
-              this.lastEntryPrice    = market.yesPrice;
+              this.lastEntryPrice = market.yesPrice;
               this.windowTradeCount++;
               this.sessionTrades++;
-              this.totalDeployed    += size;
-              this.lastAction     = `BUY YES ($${size.toFixed(2)}) TP@${(tpTarget * 100).toFixed(0)}c SL@${(slTarget * 100).toFixed(0)}c`;
+              this.lastAction = `BUY UP ($${size.toFixed(2)}) @ ${(market.yesPrice * 100).toFixed(0)}c | BTC +$${ptbDelta.toFixed(0)} above PtB | HOLD TO RESOLUTION`;
               this.lastActionTime = new Date().toISOString();
-              void this.appendLog('buy', `BUY YES — $${size.toFixed(2)} @ ${(market.yesPrice * 100).toFixed(1)}c | TP ${(tpTarget * 100).toFixed(0)}c SL ${(slTarget * 100).toFixed(0)}c`, {
-                score: score.toFixed(0), size, price: market.yesPrice, takeProfit: tpTarget, stopLoss: slTarget,
+              void this.appendLog('buy', `BUY UP — $${size.toFixed(2)} @ ${(market.yesPrice * 100).toFixed(1)}c | BTC +$${ptbDelta.toFixed(0)} above PtB=$${ptb.toFixed(0)} | holding to resolution`, {
+                size, price: market.yesPrice, btcDelta: ptbDelta,
               });
             }
-          } else if (score < -ENTRY_THRESHOLD) {
-            // --- Buy NO (bearish) ---
-            // Price filter: only buy NO if noPrice < 0.60
-            if (market.noPrice >= MAX_ENTRY_PRICE) {
-              this.lastAction = `FLAT (NO too expensive: ${(market.noPrice * 100).toFixed(0)}c)`;
-              logger.info('Btc5MinBot: FLAT — NO price too high for entry', {
-                noPrice: market.noPrice, maxEntry: MAX_ENTRY_PRICE,
-              });
-              break;
-            }
-
-            // Momentum logged but not required — direction score already incorporates it
-
-            const size = computeTradeSize(availableBalance, score, market.noPrice, riskAppetite, riskLimits.maxSingleTrade);
-            const tpTarget = market.noPrice * (1 + takeProfitPct);
-            const slTarget = market.noPrice * (1 - stopLossPct);
-            logger.info('Btc5MinBot: FLAT -> BUY NO decision', {
-              score, threshold: -ENTRY_THRESHOLD, size: size.toFixed(2),
-              entry: market.noPrice, takeProfit: tpTarget.toFixed(3), stopLoss: slTarget.toFixed(3),
+          } else if (ptbDelta < 0 && market.noPrice <= MAX_ENTRY_PRICE) {
+            // BTC is BELOW priceToBeat → market should resolve DOWN → BUY DOWN (NO)
+            const size = computeTradeSize(availableBalance, market.noPrice, riskAppetite, riskLimits.maxSingleTrade);
+            logger.info('Btc5MinBot: FLAT -> BUY DOWN (BTC below PtB)', {
+              btcPrice: btcNow.toFixed(2), priceToBeat: ptb.toFixed(2),
+              delta: `-$${Math.abs(ptbDelta).toFixed(0)}`, noPrice: market.noPrice.toFixed(3),
+              size: size.toFixed(2), strategy: 'hold-to-resolution',
             });
             const posId = await this.executeTrade(market, 'NO', size, this.windowAiDecisionId!);
             if (posId) {
               this.currentPositionId = posId;
-              this.currentSide       = 'NO';
+              this.currentSide = 'NO';
               this.positionEnteredAt = Date.now();
-              this.lastEntryPrice    = market.noPrice;
+              this.lastEntryPrice = market.noPrice;
               this.windowTradeCount++;
               this.sessionTrades++;
-              this.totalDeployed    += size;
-              this.lastAction     = `BUY NO ($${size.toFixed(2)}) TP@${(tpTarget * 100).toFixed(0)}c SL@${(slTarget * 100).toFixed(0)}c`;
+              this.lastAction = `BUY DOWN ($${size.toFixed(2)}) @ ${(market.noPrice * 100).toFixed(0)}c | BTC -$${Math.abs(ptbDelta).toFixed(0)} below PtB | HOLD TO RESOLUTION`;
               this.lastActionTime = new Date().toISOString();
-              void this.appendLog('buy', `BUY NO — $${size.toFixed(2)} @ ${(market.noPrice * 100).toFixed(1)}c | TP ${(tpTarget * 100).toFixed(0)}c SL ${(slTarget * 100).toFixed(0)}c`, {
-                score: score.toFixed(0), size, price: market.noPrice, takeProfit: tpTarget, stopLoss: slTarget,
+              void this.appendLog('buy', `BUY DOWN — $${size.toFixed(2)} @ ${(market.noPrice * 100).toFixed(1)}c | BTC -$${Math.abs(ptbDelta).toFixed(0)} below PtB=$${ptb.toFixed(0)} | holding to resolution`, {
+                size, price: market.noPrice, btcDelta: ptbDelta,
               });
             }
           } else {
-            this.lastAction = `FLAT (score=${score.toFixed(0)}, need >${ENTRY_THRESHOLD.toFixed(0)})`;
-            void this.appendLog('hold', `Holding FLAT — score ${score.toFixed(0)}, threshold +/-${ENTRY_THRESHOLD.toFixed(0)}`, { score: score.toFixed(0) });
-            logger.info('Btc5MinBot: HOLD FLAT — score below threshold', {
-              score: score.toFixed(1),
-              threshold: ENTRY_THRESHOLD.toFixed(1),
-            });
+            // Price too expensive or delta direction doesn't match available side
+            this.lastAction = `FLAT (Up=${(market.yesPrice * 100).toFixed(0)}c Dn=${(market.noPrice * 100).toFixed(0)}c | BTC delta $${ptbDelta.toFixed(0)} | max entry ${(MAX_ENTRY_PRICE * 100).toFixed(0)}c)`;
           }
           break;
         }
 
         case 'long_yes': {
-          // Must enforce minimum hold time before any exit (unless stop-loss hit hard)
-          if (!canExit && pricePnlPct > -stopLossPct) {
-            this.lastAction = `HOLD YES (min hold ${Math.round(holdTimeMs / 1000)}s/${riskLimits.minHoldTimeMs / 1000}s)`;
-            logger.info('Btc5MinBot: HOLD LONG_YES — minimum hold time', {
-              score: score.toFixed(1), holdTimeMs, minHoldMs: riskLimits.minHoldTimeMs,
+          // HOLD TO RESOLUTION — only exit on emergency (BTC crosses hard wrong way)
+          const currentYes = this.lastKnownYesPrice;
+
+          // Emergency exit: BTC fell far below priceToBeat (wrong side)
+          if (ptb != null && btcNow < ptb - EMERGENCY_EXIT_DELTA && canExit) {
+            logger.info('Btc5MinBot: LONG_YES -> EMERGENCY EXIT (BTC crashed below PtB)', {
+              btcPrice: btcNow.toFixed(2), priceToBeat: ptb.toFixed(2),
+              delta: `$${(btcNow - ptb).toFixed(0)}`, threshold: `-$${EMERGENCY_EXIT_DELTA}`,
+              currentYes, entryPrice: this.lastEntryPrice,
             });
-          } else if (pricePnlPct >= takeProfitPct) {
-            // TAKE PROFIT — price moved in our favor
-            const currentPrice = this.lastKnownYesPrice;
-            logger.info('Btc5MinBot: LONG_YES -> TAKE PROFIT', {
-              entryPrice: this.lastEntryPrice,
-              currentPrice,
-              pnlPct: (pricePnlPct * 100).toFixed(1) + '%',
-              target: (takeProfitPct * 100).toFixed(0) + '%',
-            });
-            await this.closeCurrentPosition('take-profit');
-            this.lastAction     = `TAKE PROFIT YES +${(pricePnlPct * 100).toFixed(1)}% (entry=${(this.lastEntryPrice * 100).toFixed(0)}c now=${(currentPrice * 100).toFixed(0)}c)`;
+            await this.closeCurrentPosition('emergency-exit');
+            this.stoppedOutThisWindow = true;
+            this.lastAction = `EMERGENCY EXIT UP (BTC -$${Math.abs(btcNow - ptb).toFixed(0)} below PtB)`;
             this.lastActionTime = new Date().toISOString();
-            void this.appendLog('close', `TAKE PROFIT YES +${(pricePnlPct * 100).toFixed(1)}% — entry ${(this.lastEntryPrice * 100).toFixed(0)}c -> ${(currentPrice * 100).toFixed(0)}c`, {
-              entryPrice: this.lastEntryPrice, currentPrice, pnlPct: pricePnlPct,
-            });
-          } else if (pricePnlPct <= -stopLossPct) {
-            // STOP LOSS — cut the loser
-            const currentPrice = this.lastKnownYesPrice;
-            logger.info('Btc5MinBot: LONG_YES -> STOP LOSS', {
-              entryPrice: this.lastEntryPrice,
-              currentPrice,
-              pnlPct: (pricePnlPct * 100).toFixed(1) + '%',
-              stopAt: (-stopLossPct * 100).toFixed(0) + '%',
-            });
-            await this.closeCurrentPosition('stop-loss');
-            this.lastAction     = `STOP LOSS YES ${(pricePnlPct * 100).toFixed(1)}% (entry=${(this.lastEntryPrice * 100).toFixed(0)}c now=${(currentPrice * 100).toFixed(0)}c)`;
-            this.lastActionTime = new Date().toISOString();
-            void this.appendLog('close', `STOP LOSS YES ${(pricePnlPct * 100).toFixed(1)}% — entry ${(this.lastEntryPrice * 100).toFixed(0)}c -> ${(currentPrice * 100).toFixed(0)}c`, {
-              entryPrice: this.lastEntryPrice, currentPrice, pnlPct: pricePnlPct,
-            });
-          } else if (canExit && score < EXIT_THRESHOLD) {
-            // Signal weakened — exit to flat (no flip)
-            logger.info('Btc5MinBot: LONG_YES -> FLAT (signal weakened)', {
-              score: score.toFixed(1), exitThreshold: EXIT_THRESHOLD.toFixed(1),
-              pnlPct: (pricePnlPct * 100).toFixed(1) + '%',
-            });
-            await this.closeCurrentPosition('signal-weakened');
-            this.lastAction     = `CLOSE YES -> FLAT (score=${score.toFixed(0)}, pnl=${(pricePnlPct * 100).toFixed(1)}%)`;
-            this.lastActionTime = new Date().toISOString();
-            void this.appendLog('close', `CLOSE YES -> FLAT — score weakened to ${score.toFixed(0)}, pnl ${(pricePnlPct * 100).toFixed(1)}%`, {
-              score: score.toFixed(0), pnlPct: pricePnlPct,
+            void this.appendLog('close', `EMERGENCY EXIT UP — BTC $${btcNow.toFixed(0)} is $${Math.abs(btcNow - ptb).toFixed(0)} below PtB $${ptb.toFixed(0)} | cut loss`, {
+              btcPrice: btcNow, priceToBeat: ptb, delta: btcNow - ptb,
             });
           } else {
-            // Still holding — log TP/SL levels
-            this.lastAction = `HOLD YES (pnl=${(pricePnlPct * 100).toFixed(1)}%, TP@+${(takeProfitPct * 100).toFixed(0)}% SL@-${(stopLossPct * 100).toFixed(0)}%)`;
-            logger.info('Btc5MinBot: HOLD LONG_YES — within TP/SL range', {
-              score: score.toFixed(1),
-              pnlPct: (pricePnlPct * 100).toFixed(1) + '%',
-              takeProfitPct: (takeProfitPct * 100).toFixed(0) + '%',
-              stopLossPct: (stopLossPct * 100).toFixed(0) + '%',
+            // Hold — let binary resolution do its work
+            const pnlStr = this.lastEntryPrice > 0 ? `${(pricePnlPct * 100).toFixed(1)}%` : 'N/A';
+            const deltaStr = ptb != null ? `BTC ${ptbDelta >= 0 ? '+' : ''}$${ptbDelta.toFixed(0)} vs PtB` : '';
+            this.lastAction = `HOLD UP (${pnlStr}) ${deltaStr} | riding to resolution`;
+            logger.info('Btc5MinBot: HOLD LONG_YES — riding to resolution', {
+              pnlPct: pnlStr, currentYes, entryPrice: this.lastEntryPrice,
+              btcDelta: ptbDelta.toFixed(0), msRemaining,
             });
           }
           break;
         }
 
         case 'long_no': {
-          // Must enforce minimum hold time before any exit (unless stop-loss hit hard)
-          if (!canExit && pricePnlPct > -stopLossPct) {
-            this.lastAction = `HOLD NO (min hold ${Math.round(holdTimeMs / 1000)}s/${riskLimits.minHoldTimeMs / 1000}s)`;
-            logger.info('Btc5MinBot: HOLD LONG_NO — minimum hold time', {
-              score: score.toFixed(1), holdTimeMs, minHoldMs: riskLimits.minHoldTimeMs,
+          // HOLD TO RESOLUTION — only exit on emergency (BTC crosses hard wrong way)
+          const currentNo = this.lastKnownNoPrice;
+
+          // Emergency exit: BTC rose far above priceToBeat (wrong side)
+          if (ptb != null && btcNow > ptb + EMERGENCY_EXIT_DELTA && canExit) {
+            logger.info('Btc5MinBot: LONG_NO -> EMERGENCY EXIT (BTC surged above PtB)', {
+              btcPrice: btcNow.toFixed(2), priceToBeat: ptb.toFixed(2),
+              delta: `+$${(btcNow - ptb).toFixed(0)}`, threshold: `+$${EMERGENCY_EXIT_DELTA}`,
+              currentNo, entryPrice: this.lastEntryPrice,
             });
-          } else if (pricePnlPct >= takeProfitPct) {
-            // TAKE PROFIT — price moved in our favor
-            const currentPrice = this.lastKnownNoPrice;
-            logger.info('Btc5MinBot: LONG_NO -> TAKE PROFIT', {
-              entryPrice: this.lastEntryPrice,
-              currentPrice,
-              pnlPct: (pricePnlPct * 100).toFixed(1) + '%',
-              target: (takeProfitPct * 100).toFixed(0) + '%',
-            });
-            await this.closeCurrentPosition('take-profit');
-            this.lastAction     = `TAKE PROFIT NO +${(pricePnlPct * 100).toFixed(1)}% (entry=${(this.lastEntryPrice * 100).toFixed(0)}c now=${(currentPrice * 100).toFixed(0)}c)`;
+            await this.closeCurrentPosition('emergency-exit');
+            this.stoppedOutThisWindow = true;
+            this.lastAction = `EMERGENCY EXIT DOWN (BTC +$${(btcNow - ptb).toFixed(0)} above PtB)`;
             this.lastActionTime = new Date().toISOString();
-            void this.appendLog('close', `TAKE PROFIT NO +${(pricePnlPct * 100).toFixed(1)}% — entry ${(this.lastEntryPrice * 100).toFixed(0)}c -> ${(currentPrice * 100).toFixed(0)}c`, {
-              entryPrice: this.lastEntryPrice, currentPrice, pnlPct: pricePnlPct,
-            });
-          } else if (pricePnlPct <= -stopLossPct) {
-            // STOP LOSS — cut the loser
-            const currentPrice = this.lastKnownNoPrice;
-            logger.info('Btc5MinBot: LONG_NO -> STOP LOSS', {
-              entryPrice: this.lastEntryPrice,
-              currentPrice,
-              pnlPct: (pricePnlPct * 100).toFixed(1) + '%',
-              stopAt: (-stopLossPct * 100).toFixed(0) + '%',
-            });
-            await this.closeCurrentPosition('stop-loss');
-            this.lastAction     = `STOP LOSS NO ${(pricePnlPct * 100).toFixed(1)}% (entry=${(this.lastEntryPrice * 100).toFixed(0)}c now=${(currentPrice * 100).toFixed(0)}c)`;
-            this.lastActionTime = new Date().toISOString();
-            void this.appendLog('close', `STOP LOSS NO ${(pricePnlPct * 100).toFixed(1)}% — entry ${(this.lastEntryPrice * 100).toFixed(0)}c -> ${(currentPrice * 100).toFixed(0)}c`, {
-              entryPrice: this.lastEntryPrice, currentPrice, pnlPct: pricePnlPct,
-            });
-          } else if (canExit && score > -EXIT_THRESHOLD) {
-            // Signal weakened — exit to flat (no flip)
-            logger.info('Btc5MinBot: LONG_NO -> FLAT (signal weakened)', {
-              score: score.toFixed(1), exitThreshold: (-EXIT_THRESHOLD).toFixed(1),
-              pnlPct: (pricePnlPct * 100).toFixed(1) + '%',
-            });
-            await this.closeCurrentPosition('signal-weakened');
-            this.lastAction     = `CLOSE NO -> FLAT (score=${score.toFixed(0)}, pnl=${(pricePnlPct * 100).toFixed(1)}%)`;
-            this.lastActionTime = new Date().toISOString();
-            void this.appendLog('close', `CLOSE NO -> FLAT — score weakened to ${score.toFixed(0)}, pnl ${(pricePnlPct * 100).toFixed(1)}%`, {
-              score: score.toFixed(0), pnlPct: pricePnlPct,
+            void this.appendLog('close', `EMERGENCY EXIT DOWN — BTC $${btcNow.toFixed(0)} is $${(btcNow - ptb).toFixed(0)} above PtB $${ptb.toFixed(0)} | cut loss`, {
+              btcPrice: btcNow, priceToBeat: ptb, delta: btcNow - ptb,
             });
           } else {
-            // Still holding — log TP/SL levels
-            this.lastAction = `HOLD NO (pnl=${(pricePnlPct * 100).toFixed(1)}%, TP@+${(takeProfitPct * 100).toFixed(0)}% SL@-${(stopLossPct * 100).toFixed(0)}%)`;
-            logger.info('Btc5MinBot: HOLD LONG_NO — within TP/SL range', {
-              score: score.toFixed(1),
-              pnlPct: (pricePnlPct * 100).toFixed(1) + '%',
-              takeProfitPct: (takeProfitPct * 100).toFixed(0) + '%',
-              stopLossPct: (stopLossPct * 100).toFixed(0) + '%',
+            // Hold — let binary resolution do its work
+            const pnlStr = this.lastEntryPrice > 0 ? `${(pricePnlPct * 100).toFixed(1)}%` : 'N/A';
+            const deltaStr = ptb != null ? `BTC ${ptbDelta >= 0 ? '+' : ''}$${ptbDelta.toFixed(0)} vs PtB` : '';
+            this.lastAction = `HOLD DOWN (${pnlStr}) ${deltaStr} | riding to resolution`;
+            logger.info('Btc5MinBot: HOLD LONG_NO — riding to resolution', {
+              pnlPct: pnlStr, currentNo, entryPrice: this.lastEntryPrice,
+              btcDelta: ptbDelta.toFixed(0), msRemaining,
             });
           }
           break;
@@ -852,18 +684,10 @@ export class Btc5MinBot {
 
   /**
    * For synthetic markets, detect if the window should be treated as new.
-   * Synthetic markets always have end_date = now + 5 min, so they
-   * "roll over" every cycle. We treat it as a new window if the
-   * previous window's trade count has been reached or no AI decision exists.
    */
   private shouldRefreshSyntheticWindow(): boolean {
-    // If we have no AI decision, we need a new window
     if (!this.windowAiDecisionId) return true;
-
-    // If max trades reached, start a new window
     if (this.windowTradeCount >= this.maxTradesPerWindow) return true;
-
-    // Otherwise keep the current window going
     return false;
   }
 
@@ -886,6 +710,7 @@ export class Btc5MinBot {
       conditionId:      market.conditionId ?? 'N/A',
       windowEnd:        market.endDate?.toISOString() ?? 'unknown',
       outcomes:         'Up (YES) / Down (NO)',
+      strategy:         'Follow The Market v2',
     });
 
     const priceToBeatStr = market.priceToBeat
@@ -894,7 +719,7 @@ export class Btc5MinBot {
 
     void this.appendLog(
       'signal',
-      `New window: ${market.title} | Up=${market.yesPrice.toFixed(3)} Down=${market.noPrice.toFixed(3)} | priceToBeat=${priceToBeatStr}${market.is_synthetic ? ' [SYNTHETIC]' : ''}`,
+      `New window: ${market.title} | Up=${market.yesPrice.toFixed(3)} Down=${market.noPrice.toFixed(3)} | priceToBeat=${priceToBeatStr}${market.is_synthetic ? ' [SYNTHETIC]' : ''} | Strategy: Follow The Market`,
       {
         marketId: market.id,
         isSynthetic: market.is_synthetic,
@@ -913,8 +738,7 @@ export class Btc5MinBot {
     }
 
     // Resolve priceToBeat — prefer what Gamma/DB gave us; fall back to the
-    // current BTC price from signals if still unavailable (e.g. window is
-    // brand-new and no candle exists at eventStartTime yet).
+    // current BTC price from signals if still unavailable
     const resolvedPriceToBeat: number | null =
       market.priceToBeat != null
         ? market.priceToBeat
@@ -930,7 +754,7 @@ export class Btc5MinBot {
       });
     }
 
-    // Reset window state
+    // Reset window state (including stoppedOutThisWindow)
     this.currentWindowMarketId = market.id;
     this.currentWindowEndTs    = windowEndTs;
     this.currentPriceToBeat    = resolvedPriceToBeat;
@@ -939,9 +763,9 @@ export class Btc5MinBot {
     this.windowTradeCount      = 0;
     this.windowAiDecisionId    = null;
     this.lastEntryPrice        = 0;
+    this.stoppedOutThisWindow  = false;
 
     // For synthetic markets, ensure a market record exists in the DB
-    // so that orders/positions can reference it via foreign key.
     if (market.is_synthetic) {
       await this.ensureMarketRecord(market);
     }
@@ -955,13 +779,11 @@ export class Btc5MinBot {
   /**
    * Upsert a market record in the markets table so that
    * orders, positions, and AI decisions can reference it via foreign key.
-   * Works for both real Gamma markets and synthetic sandbox markets.
    */
   private async ensureMarketRecord(market: ActiveBtcMarket): Promise<void> {
     try {
       const existing = await prisma.market.findUnique({ where: { id: market.id } });
       if (existing) {
-        // Update end_date and prices
         await prisma.market.update({
           where: { id: market.id },
           data: {
@@ -1042,14 +864,12 @@ export class Btc5MinBot {
         reasoning:  aiResponse.reasoning,
       });
 
-      // Persist AI decision record — use market data directly (no DB lookup needed
-      // since the market may only exist on Polymarket, not in our local DB)
+      // Persist AI decision record
       const direction = aiResponse.bias === 'bearish' ? 'sell' : 'buy';
       const outcomeToken = aiResponse.bias === 'bearish'
         ? market.noTokenId
         : market.yesTokenId;
 
-      // Ensure market record exists in DB for foreign key
       await this.ensureMarketRecord(market);
 
       const aiRecord = await aiDecisionService.create({
@@ -1062,9 +882,9 @@ export class Btc5MinBot {
         size_hint:         null,
         fair_value:        String(market.yesPrice.toFixed(4)),
         estimated_edge:    String((Math.abs(signals.direction_score) / 200).toFixed(6)),
-        reasoning:         `[Scalper window${market.is_synthetic ? ' SYNTHETIC' : ''}] ${aiResponse.reasoning}`,
-        regime_assessment: `btc-5min-scalper | score=${signals.direction_score.toFixed(0)} | ${signals.trend}${market.is_synthetic ? ' | synthetic' : ''}`,
-        model_used:        'btc-5min-scalper',
+        reasoning:         `[Follow The Market v2${market.is_synthetic ? ' SYNTHETIC' : ''}] ${aiResponse.reasoning}`,
+        regime_assessment: `btc-5min-follow-market | trend=${signals.trend}${market.is_synthetic ? ' | synthetic' : ''}`,
+        model_used:        'btc-5min-follow-market',
         latency_ms:        0,
         tokens_used:       0,
         prompt_version:    PROMPT_VERSION,
@@ -1083,7 +903,6 @@ export class Btc5MinBot {
       logger.error('Btc5MinBot: window AI call failed', {
         error: (err as Error).message,
       });
-      // Create a fallback decision so we can still trade deterministically
       await this.createFallbackDecision(market, signals);
     }
   }
@@ -1093,7 +912,6 @@ export class Btc5MinBot {
     signals: BtcSignals,
   ): Promise<void> {
     try {
-      // Ensure market record exists in DB for foreign key
       await this.ensureMarketRecord(market);
 
       const aiRecord = await aiDecisionService.create({
@@ -1106,13 +924,13 @@ export class Btc5MinBot {
         size_hint:         null,
         fair_value:        String(market.yesPrice.toFixed(4)),
         estimated_edge:    String((Math.abs(signals.direction_score) / 200).toFixed(6)),
-        reasoning:         '[Scalper fallback] AI call failed, using signal-based trading',
-        regime_assessment: `btc-5min-scalper-fallback | score=${signals.direction_score.toFixed(0)}`,
-        model_used:        'btc-5min-scalper-fallback',
+        reasoning:         '[Follow The Market fallback] AI call failed, using market-price-based trading',
+        regime_assessment: `btc-5min-follow-market-fallback | trend=${signals.trend}`,
+        model_used:        'btc-5min-follow-market-fallback',
         latency_ms:        0,
         tokens_used:       0,
         prompt_version:    PROMPT_VERSION,
-        dashboard_text:    'AI unavailable — fallback to signals',
+        dashboard_text:    'AI unavailable — fallback to market prices',
         account_state:     {} as Prisma.InputJsonValue,
       } as Parameters<typeof aiDecisionService.create>[0]);
 
@@ -1136,7 +954,6 @@ export class Btc5MinBot {
     const price   = side === 'YES' ? market.yesPrice   : market.noPrice;
 
     try {
-      // Place order through existing order manager (respects mock/live mode)
       const { order } = await orderManager.placeOrder({
         marketId:      market.id,
         decisionId,
@@ -1147,11 +964,10 @@ export class Btc5MinBot {
         orderType:     'limit',
         confidence:    0.8,
         estimatedEdge: null,
-        regime:        'btc-5min-scalper',
+        regime:        'btc-5min-follow-market',
       });
 
       if (order.status === 'filled') {
-        // Open position via position manager (handles bankroll adjustment)
         const position = await positionManager.openPosition({
           marketId:     market.id,
           outcomeToken: tokenId,
@@ -1173,7 +989,6 @@ export class Btc5MinBot {
           entryPrice,
         });
 
-        // Publish trade event to WebSocket clients
         emitBtcBotTrade({
           type:      'trade',
           side,
@@ -1209,7 +1024,6 @@ export class Btc5MinBot {
     try {
       const position = await positionService.findById(this.currentPositionId);
 
-      // Use current market price for the exit
       const exitPrice = this.currentSide === 'YES'
         ? this.lastKnownYesPrice
         : this.lastKnownNoPrice;
@@ -1280,6 +1094,7 @@ export class Btc5MinBot {
     this.windowAiDecisionId    = null;
     this.positionEnteredAt     = null;
     this.lastEntryPrice        = 0;
+    this.stoppedOutThisWindow  = false;
   }
 
   // ─── Activity log ────────────────────────────────────────────────────────────
@@ -1297,7 +1112,6 @@ export class Btc5MinBot {
         message,
         ...(meta ? { meta } : {}),
       });
-      // lpush = newest first; ltrim to keep max entries
       await redis.lpush(ACTIVITY_LOG_KEY, entry);
       await redis.ltrim(ACTIVITY_LOG_KEY, 0, ACTIVITY_LOG_MAX - 1);
     } catch (err) {
@@ -1319,7 +1133,6 @@ export class Btc5MinBot {
       this.lastKnownYesPrice = updated.yesPrice;
       this.lastKnownNoPrice = updated.noPrice;
 
-      // Update Redis cache with fresh prices for REST API consumers
       const statusPayload = {
         signals: null,
         activeMarket: {
@@ -1343,13 +1156,11 @@ export class Btc5MinBot {
         timestamp:        new Date().toISOString(),
       };
 
-      // Update Redis cache so REST API returns fresh prices too
       await redis.setex(STATUS_REDIS_KEY, STATUS_TTL_SEC, JSON.stringify({
         ...statusPayload,
         currentPositionId: this.currentPositionId,
       }));
 
-      // Emit to WebSocket
       emitBtcBotStatus(statusPayload);
     } catch {
       // Non-fatal — skip this refresh
@@ -1404,7 +1215,6 @@ export class Btc5MinBot {
       });
     }
 
-    // Publish to WebSocket clients via Redis bridge (bot runs in its own process)
     emitBtcBotStatus(statusPayload);
   }
 }
@@ -1412,11 +1222,11 @@ export class Btc5MinBot {
 // ─── Prompt builders ─────────────────────────────────────────────────────────
 
 function buildSystemPrompt(riskAppetite: number): string {
-  return `You are a BTC 5-minute scalper bot. Given technical signals, provide a directional bias for the current 5-minute window.
+  return `You are a BTC 5-minute scalper bot using a "Follow The Market" strategy.
+Given technical signals and market prices, provide a directional bias for the current 5-minute window.
 Respond with ONLY JSON: {"bias":"bullish"|"bearish"|"neutral","confidence":0.0-1.0,"reasoning":"one sentence"}
-bullish = Bitcoin will go UP in this window. bearish = Bitcoin will go DOWN.
-This bias is used for multiple scalp trades within the window.
-Only give a directional bias when signals clearly align. Say neutral when uncertain.
+The bot enters ONLY when the market itself shows direction (one side priced > 58c) AND BTC price confirms vs priceToBeat.
+Your bias helps with sizing and confidence, not entry/exit decisions.
 RISK APPETITE: ${riskAppetite}/10`;
 }
 
@@ -1437,12 +1247,12 @@ function buildUserPrompt(
 - Direction Score: ${signals.direction_score.toFixed(0)}/100 | Suggested: ${signals.suggested_side ?? 'skip'}
 
 Market: "${market.title}"
-- YES: ${market.yesPrice.toFixed(3)} | NO: ${market.noPrice.toFixed(3)}
+- YES/Up: ${market.yesPrice.toFixed(3)} | NO/Down: ${market.noPrice.toFixed(3)}
+- priceToBeat: ${market.priceToBeat != null ? `$${market.priceToBeat.toFixed(2)}` : 'N/A'}
 - Liquidity: $${market.liquidity.toLocaleString()} | Expiry: ${expiryStr}
 
-Account: $${balance.toFixed(2)} available | ${positions} open positions
-
-This is a SCALPER window. Provide a directional bias for multiple quick trades.`;
+Strategy: Follow The Market — enter when one side > 58c and BTC confirms vs priceToBeat.
+Account: $${balance.toFixed(2)} available | ${positions} open positions`;
 }
 
 function formatExpiry(date: Date): string {
@@ -1478,7 +1288,6 @@ async function callWindowAi(
 }
 
 function parseAiResponse(raw: string, signals: BtcSignals): WindowAiResponse {
-  // Strip markdown fences
   const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   const jsonStr    = fenceMatch?.[1]?.trim() ?? raw.match(/\{[\s\S]*\}/)?.[0]?.trim() ?? raw.trim();
 
